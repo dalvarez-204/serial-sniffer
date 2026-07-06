@@ -36,5 +36,29 @@ def log_capture_to_file(interface: str, device_address: int, filepath: str):
             f.write(json.dumps(record) + "\n")
             f.flush()
 
+def load_capture_log(filepath:str):
+    with open(filepath) as f:
+        for line in f:
+            record = json.loads(line)
+            yield record["timestamp"], record["direction"], bytes.fromhex(record["data_hex"])
+
+def analyze_byte_variability(messages: list[bytes]):
+    """ takes the messages and checks if they are fixed-length bitstrings,
+     'messages' is meant to be a batch of related captures, like all 10 responses """
+    lengths = {len(m) for m in messages}
+    if len(lengths) > 1: 
+        return {"error": "messages have inconsistent lengths", "lengths": lengths}
+    length = lengths.pop()
+    results = []
+    for offset in range(length):
+        values = {message[offset] for message in messages}
+        results.append({
+            "offset": offset,
+            "constant": len(values) ==1, # this should help give us a clue if it is start / end byte
+            # or if it is a protocol specifier
+            "values": sorted(values),
+        })
+    return results
+
 if __name__ == "__main__": 
     log_capture_to_file("usbmon3", 2, "capture_log.jsonl")
