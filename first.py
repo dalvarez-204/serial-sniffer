@@ -57,9 +57,58 @@ def analyze_byte_variability(messages: list[bytes]):
             "offset": offset,
             "constant": len(values) ==1, # this should help give us a clue if it is start / end byte
             # or if it is a protocol specifier
-            "values": sorted(values),
+            "values": sorted(values), 
+            # each 'value' represents a byte that was sent,
+            # so this is not super descriptive if a number spans several bytes!
         })
     return results
+
+def xor_checksum(data: bytes) -> int: 
+    result = 0
+    for byte in data:
+        result ^= byte
+    return result
+
+def sum_checksum(data:bytes)-> int:
+    return sum(data) % 256
+
+
+# let's get some dynamic programming in here!!!!
+
+def find_checksum_range(messages: list[bytes]) -> dict | None:
+    length = len(messages[0])
+    end_offset = length -1
+    checksum_offset = length-2
+
+    end_values = {m[end_offset] for m in messages}
+    assert len(end_values)==1, "end byte isn't constant across messages"
+
+    for algo_name, combine, identity in [
+        ("xor", lambda a,b: a ^ b, 0),
+        ("sum_mod_256", lambda a,b: (a+b) %256, 0)
+    ]:
+        prefixes = []
+        for m in messages:
+            prefix = [identity]
+            for byte in m[:checksum_offset]:
+                prefix.append(combine(prefix[-1], byte))
+            prefixes.append(prefix)
+        
+        for start in range(checksum_offset):
+            if algo_name=="xor":
+                predicted = [prefixes[i][checksum_offset] ^ prefixes[i][start] for i in range(len(messages))]
+            else:
+                predicted = [prefixes[i][checksum_offset] - prefixes[i][start] % 256 for i in range(len(messages))]
+            
+            if all(predicted[i] == messages[i][checksum_offset] for i in range(len(messages))):
+                return {
+                    "algorithm": algo_name,
+                    "covers_offsets": (start, checksum_offset-1),
+                    "checksum_offset": checksum_offset, # for now this is a static assumption
+                    "end_offset": end_offset,
+                }
+    return None
+
 
 if __name__ == "__main__": 
     if sys.argv[1] == "capture":
@@ -69,3 +118,4 @@ if __name__ == "__main__":
         out_messages = [data for ts, direction, data in records if direction == "OUT"]
         for entry in analyze_byte_variability(out_messages):
             print(entry)
+        print(find_checksum_range(out_messages))
