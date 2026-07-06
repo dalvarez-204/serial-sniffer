@@ -1,5 +1,6 @@
 import subprocess
 import json
+import sys
 
 def stream_usb_capture(interface: str, device_address: int): 
     cmd = [
@@ -61,4 +62,10 @@ def analyze_byte_variability(messages: list[bytes]):
     return results
 
 if __name__ == "__main__": 
-    log_capture_to_file("usbmon3", 2, "capture_log.jsonl")
+    if sys.argv[1] == "capture":
+        log_capture_to_file("usbmon3", 2, "capture_log.jsonl")
+    elif sys.argv[1] == "analyze": 
+        records = list(load_capture_log("capture_log.jsonl"))
+        out_messages = [data for ts, direction, data in records if direction == "OUT"]
+        for entry in analyze_byte_variability(out_messages):
+            print(entry)
