@@ -1,4 +1,5 @@
 import subprocess
+import json
 
 def stream_usb_capture(interface: str, device_address: int): 
     cmd = [
@@ -22,7 +23,18 @@ def stream_usb_capture(interface: str, device_address: int):
         data = bytes.fromhex(capdata_str.replace(":", ""))
         yield timestamp, direction, data
 
+def log_capture_to_file(interface: str, device_address: int, filepath: str):
+    """ captures all of our information for the JSON file, which we will use as 
+    'context' to help inform our future moves """
+    with open(filepath, "w") as f: 
+        for timestamp, direction, data in stream_usb_capture(interface, device_address):
+            record = {
+                "timestamp": timestamp, 
+                "direction": direction,
+                "data_hex": data.hex(),
+            }
+            f.write(json.dumps(record) + "\n")
+            f.flush()
 
 if __name__ == "__main__": 
-    for ts, direction, data in stream_usb_capture("usbmon3", 2):
-        print(ts,direction, data)
+    log_capture_to_file("usbmon3", 2, "capture_log.jsonl")
