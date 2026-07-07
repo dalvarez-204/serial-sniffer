@@ -1,0 +1,49 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Serial Sniffer — Capture Labeling</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <h1>Serial Sniffer</h1>
+  <p class="hint">
+    Click a message to label it. Colors:
+    <span class="legend constant">framing (constant)</span>
+    <span class="legend checksum">checksum candidate</span>
+    <span class="legend data">data</span>
+  </p>
+  <div id="confidence-warnings"></div>
+  <button id="add-to-analysis">Add selected to Analysis</button>
+  <div id="capture-table"></div>
+
+  <div id="analysis-panel" class="hidden">
+    <h2>Analysis</h2>
+    <div id="analysis-messages"></div>
+    <div class="analysis-controls">
+      <label>Span start <input id="span-start" type="number" min="0" placeholder="optional"></label>
+      <label>Span end <input id="span-end" type="number" min="0" placeholder="optional"></label>
+      <label>Tolerance <input id="tolerance" type="number" min="0" value="0"></label>
+      <label>Scales (comma-separated, blank = try common ones) <input id="scales" type="text" placeholder="e.g. 1, 100"></label>
+      <button id="probe-btn">Probe span (decode only)</button>
+      <button id="search-btn">Find scaled value</button>
+      <button id="clear-analysis">Clear analysis</button>
+    </div>
+    <div id="analysis-results"></div>
+  </div>
+
+  <div id="label-panel" class="hidden">
+    <h2>Label message <span id="label-index"></span></h2>
+    <label>Name
+      <input id="label-name" type="text" placeholder="e.g. set_voltage">
+    </label>
+    <label>Notes
+      <textarea id="label-notes" placeholder="what did this do / what value did you set?"></textarea>
+    </label>
+    <button id="label-save">Save label</button>
+    <button id="label-close">Close</button>
+  </div>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

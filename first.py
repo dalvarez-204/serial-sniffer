@@ -75,10 +75,12 @@ def sum_checksum(data:bytes)-> int:
 
 # let's get some dynamic programming in here!!!!
 
-def find_checksum_range(messages: list[bytes]) -> dict | None:
+def find_checksum_range(messages: list[bytes], checksum_offset: int | None = None, end_offset: int | None = None) -> dict | None:
     length = len(messages[0])
-    end_offset = length -1
-    checksum_offset = length-2
+    if end_offset is None:
+        end_offset = length -1
+    if checksum_offset is None:
+        checksum_offset = length-2
 
     end_values = {m[end_offset] for m in messages}
     assert len(end_values)==1, "end byte isn't constant across messages"
@@ -98,9 +100,11 @@ def find_checksum_range(messages: list[bytes]) -> dict | None:
             if algo_name=="xor":
                 predicted = [prefixes[i][checksum_offset] ^ prefixes[i][start] for i in range(len(messages))]
             else:
-                predicted = [prefixes[i][checksum_offset] - prefixes[i][start] % 256 for i in range(len(messages))]
+                predicted = [(prefixes[i][checksum_offset] - prefixes[i][start]) % 256 for i in range(len(messages))]
             
             if all(predicted[i] == messages[i][checksum_offset] for i in range(len(messages))):
+                # could return something falsely 'included like a protocol byte that is set to zero
+                # ^^ this is why it's important to have comprehensive messaging before we 
                 return {
                     "algorithm": algo_name,
                     "covers_offsets": (start, checksum_offset-1),
@@ -108,6 +112,43 @@ def find_checksum_range(messages: list[bytes]) -> dict | None:
                     "end_offset": end_offset,
                 }
     return None
+
+def extract_data_bytes(messages: list[bytes], data_range: tuple[int, int]) -> list[bytes]:
+    """ isolate the data based on a provided data_range parameter """ 
+    start, end = data_range
+    return [m[start:end + 1] for m in messages]
+
+COMMON_SCALES = [1, 10, 100, 1000, 0.1, 0.01, 0.001]
+
+# NOTE: O(spans * orders * scales * messages) — re-decodes every span from scratch.
+# Same overlapping-subproblem shape as find_checksum_range's prefix trick; fix with
+# a similar prefix-based approach later instead of re-slicing per (start, end).
+def find_scaled_value(
+        messages: list[bytes], 
+        expected_values: list[float], 
+        tolerance: int = 0, scales: list[float] | None = None, 
+        span: tuple[int,int] | None = None
+        ) -> list[dict]:
+    length = len(messages[0])
+    scales = scales if scales is not None else COMMON_SCALES
+    spans = [span] if span is not None else [(s,e) for s in range(length) for e in range(s,length)]
+
+    matches = []
+    for start, end in spans:
+        for order in ("big", "little"):
+            raws = [int.from_bytes(m[start:end + 1], order) for m in messages]
+            for scale in scales:
+                if all(
+                    abs(raws[i] - round(expected_values[i] * scale)) <= tolerance
+                    for i in range(len(messages))
+                ):
+                    matches.append({
+                        "start": start,
+                        "end": end,
+                        "byte_order": order,
+                        "scale": scale,
+                    })
+    return matches
 
 
 if __name__ == "__main__": 

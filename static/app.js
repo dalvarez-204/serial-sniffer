@@ -1,0 +1,227 @@
+let state = { messages: [], analysis: {}, labels: {}, activeIndex: null };
+let analysisSet = []; // [{index, hexBytes, ascii, expected: ""}]
+let lastMatches = [];
+
+async function loadData() {
+  const res = await fetch("/api/messages");
+  state = { ...state, ...(await res.json()) };
+  render();
+}
+
+function byteClass(groupKey, offset, analysis) {
+  const info = analysis[groupKey];
+  if (!info) return "";
+  const checksum = info.checksum;
+  if (checksum) {
+    if (offset === checksum.checksum_offset) return "checksum";
+    if (offset === checksum.end_offset) return "constant";
+    const [start, end] = checksum.covers_offsets;
+    if (offset >= start && offset <= end) return "data";
+  }
+  const variability = info.variability;
+  if (Array.isArray(variability)) {
+    const entry = variability.find((v) => v.offset === offset);
+    if (entry) return entry.constant ? "constant" : "data";
+  }
+  return "";
+}
+
+function confidenceWarnings(analysis) {
+  const warnings = [];
+  for (const [key, info] of Object.entries(analysis)) {
+    const n = info.sample_count;
+    if (n < 2) {
+      warnings.push(`"${key}": only ${n} sample — every byte will look "constant" by default, that's not real signal yet.`);
+      continue;
+    }
+    const variesAtAll = Array.isArray(info.variability) && info.variability.some((v) => !v.constant);
+    if (!variesAtAll) {
+      warnings.push(`"${key}": ${n} samples but no byte ever changed — looks like the same message was sent repeatedly. Try varying the value you send (e.g. a sweep) so real data bytes stand out from real constants.`);
+    }
+  }
+  return warnings;
+}
+
+function render() {
+  const warnings = confidenceWarnings(state.analysis);
+  const warningHtml = warnings.length
+    ? `<div class="warning-banner"><strong>Low-confidence groups:</strong><ul>${warnings.map((w) => `<li>${w}</li>`).join("")}</ul></div>`
+    : "";
+  document.getElementById("confidence-warnings").innerHTML = warningHtml;
+
+  const maxLen = Math.max(0, ...state.messages.map((m) => m.length));
+  let html = "<table><thead><tr><th></th><th>#</th><th>dir</th><th>t</th>";
+  for (let i = 0; i < maxLen; i++) html += `<th>${i}</th>`;
+  html += "<th>ascii</th><th>label</th></tr></thead><tbody>";
+
+  for (const msg of state.messages) {
+    const label = state.labels[msg.index];
+    const labeledClass = label ? "labeled" : "";
+    html += `<tr class="message-row ${labeledClass}" data-index="${msg.index}">`;
+    html += `<td><input type="checkbox" class="row-select" data-index="${msg.index}"></td>`;
+    html += `<td>${msg.index}</td>`;
+    html += `<td class="direction-${msg.direction}">${msg.direction}</td>`;
+    html += `<td>${msg.timestamp.toFixed(3)}</td>`;
+    for (let i = 0; i < maxLen; i++) {
+      const byte = msg.hex_bytes[i];
+      if (byte === undefined) { html += "<td></td>"; continue; }
+      const cls = byteClass(msg.group_key, i, state.analysis);
+      html += `<td class="byte ${cls}">${byte}</td>`;
+    }
+    html += `<td>${msg.ascii}</td>`;
+    html += `<td>${label ? label.name : ""}</td>`;
+    html += "</tr>";
+  }
+  html += "</tbody></table>";
+  document.getElementById("capture-table").innerHTML = html;
+
+  document.querySelectorAll(".message-row").forEach((row) => {
+    row.addEventListener("click", (e) => {
+      if (e.target.classList.contains("row-select")) return;
+      openLabelPanel(Number(row.dataset.index));
+    });
+  });
+}
+
+function openLabelPanel(index) {
+  state.activeIndex = index;
+  const label = state.labels[index] || { name: "", note: "" };
+  document.getElementById("label-index").textContent = index;
+  document.getElementById("label-name").value = label.name;
+  document.getElementById("label-notes").value = label.note;
+  document.getElementById("label-panel").classList.remove("hidden");
+}
+
+document.getElementById("label-close").addEventListener("click", () => {
+  document.getElementById("label-panel").classList.add("hidden");
+});
+
+document.getElementById("label-save").addEventListener("click", async () => {
+  const index = state.activeIndex;
+  const name = document.getElementById("label-name").value;
+  const note = document.getElementById("label-notes").value;
+  await fetch("/api/label", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ index, name, note }),
+  });
+  state.labels[index] = { name, note };
+  document.getElementById("label-panel").classList.add("hidden");
+  render();
+});
+
+document.getElementById("add-to-analysis").addEventListener("click", () => {
+  const checked = Array.from(document.querySelectorAll(".row-select:checked")).map(
+    (cb) => Number(cb.dataset.index)
+  );
+  if (checked.length === 0) return;
+  analysisSet = checked.map((index) => {
+    const msg = state.messages.find((m) => m.index === index);
+    return { index, hexBytes: msg.hex_bytes, ascii: msg.ascii, expected: "" };
+  });
+  lastMatches = [];
+  document.getElementById("analysis-panel").classList.remove("hidden");
+  renderAnalysisPanel();
+});
+
+document.getElementById("clear-analysis").addEventListener("click", () => {
+  analysisSet = [];
+  lastMatches = [];
+  document.getElementById("analysis-panel").classList.add("hidden");
+});
+
+function highlightClass(offset) {
+  return lastMatches.some((m) => offset >= m.start && offset <= m.end) ? "match-highlight" : "";
+}
+
+function renderAnalysisPanel() {
+  const maxLen = Math.max(0, ...analysisSet.map((m) => m.hexBytes.length));
+  let html = "<table><thead><tr><th>#</th>";
+  for (let i = 0; i < maxLen; i++) html += `<th>${i}</th>`;
+  html += "<th>ascii</th><th>expected value</th></tr></thead><tbody>";
+
+  analysisSet.forEach((msg, row) => {
+    html += `<tr><td>${msg.index}</td>`;
+    for (let i = 0; i < maxLen; i++) {
+      const byte = msg.hexBytes[i];
+      const cls = byte === undefined ? "" : highlightClass(i);
+      html += `<td class="byte ${cls}">${byte === undefined ? "" : byte}</td>`;
+    }
+    html += `<td>${msg.ascii}</td>`;
+    html += `<td><input type="text" class="expected-input" data-row="${row}" value="${msg.expected}" placeholder="e.g. 5.0"></td>`;
+    html += "</tr>";
+  });
+  html += "</tbody></table>";
+  document.getElementById("analysis-messages").innerHTML = html;
+
+  document.querySelectorAll(".expected-input").forEach((input) => {
+    input.addEventListener("input", (e) => {
+      analysisSet[Number(e.target.dataset.row)].expected = e.target.value;
+    });
+  });
+}
+
+function readSpan() {
+  const startVal = document.getElementById("span-start").value;
+  const endVal = document.getElementById("span-end").value;
+  if (startVal === "" || endVal === "") return null;
+  return [Number(startVal), Number(endVal)];
+}
+
+document.getElementById("probe-btn").addEventListener("click", () => {
+  const span = readSpan();
+  if (!span) {
+    document.getElementById("analysis-results").innerHTML =
+      '<p class="hint">Set both span start and end to probe a range.</p>';
+    return;
+  }
+  const [start, end] = span;
+  let html = "<h3>Probe result (decode only, no matching)</h3><ul>";
+  for (const msg of analysisSet) {
+    const bytesHex = msg.hexBytes.slice(start, end + 1);
+    const big = parseInt(bytesHex.join(""), 16);
+    const little = parseInt([...bytesHex].reverse().join(""), 16);
+    html += `<li>#${msg.index}: bytes [${start}-${end}] = big-endian ${big}, little-endian ${little}</li>`;
+  }
+  html += "</ul>";
+  lastMatches = [{ start, end }];
+  document.getElementById("analysis-results").innerHTML = html;
+  renderAnalysisPanel();
+});
+
+document.getElementById("search-btn").addEventListener("click", async () => {
+  const expectedValues = analysisSet.map((m) => parseFloat(m.expected));
+  if (expectedValues.some((v) => Number.isNaN(v))) {
+    document.getElementById("analysis-results").innerHTML =
+      '<p class="hint">Fill in an expected value for every selected message before searching.</p>';
+    return;
+  }
+  const tolerance = Number(document.getElementById("tolerance").value) || 0;
+  const scalesRaw = document.getElementById("scales").value.trim();
+  const scales = scalesRaw ? scalesRaw.split(",").map((s) => Number(s.trim())) : null;
+  const span = readSpan();
+
+  const res = await fetch("/api/find_value", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      indices: analysisSet.map((m) => m.index),
+      expected_values: expectedValues,
+      tolerance,
+      scales,
+      span,
+    }),
+  });
+  const { matches } = await res.json();
+  lastMatches = matches;
+
+  const html = matches.length
+    ? `<h3>Matches</h3><ul>${matches
+        .map((m) => `<li>bytes [${m.start}-${m.end}], ${m.byte_order}-endian, scale ${m.scale}</li>`)
+        .join("")}</ul>`
+    : "<p class=\"hint\">No match found for the given expected values/tolerance/scales.</p>";
+  document.getElementById("analysis-results").innerHTML = html;
+  renderAnalysisPanel();
+});
+
+loadData();
