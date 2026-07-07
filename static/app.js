@@ -151,6 +151,13 @@ function openLabelPanel(index) {
   document.getElementById("label-panel").classList.remove("hidden");
 }
 
+document.getElementById("label-panel").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && e.target.id !== "label-notes") {
+    e.preventDefault();
+    document.getElementById("label-save").click();
+  }
+});
+
 document.getElementById("label-close").addEventListener("click", () => {
   document.getElementById("label-panel").classList.add("hidden");
 });
@@ -268,6 +275,13 @@ document.getElementById("span-end").addEventListener("input", (e) => {
   renderAnalysisPanel();
 });
 
+document.getElementById("clear-span").addEventListener("click", () => {
+  spanSelection = { start: null, end: null };
+  document.getElementById("span-start").value = "";
+  document.getElementById("span-end").value = "";
+  renderAnalysisPanel();
+});
+
 function readSpan() {
   const startVal = document.getElementById("span-start").value;
   const endVal = document.getElementById("span-end").value;
@@ -307,27 +321,29 @@ document.getElementById("search-btn").addEventListener("click", async () => {
   const scalesRaw = document.getElementById("scales").value.trim();
   const scales = scalesRaw ? scalesRaw.split(",").map((s) => Number(s.trim())) : null;
   const span = readSpan();
+  const requestBody = {
+    indices: analysisSet.map((m) => m.index),
+    expected_values: expectedValues,
+    tolerance,
+    scales,
+    span,
+  };
 
   const res = await fetch("/api/find_value", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      indices: analysisSet.map((m) => m.index),
-      expected_values: expectedValues,
-      tolerance,
-      scales,
-      span,
-    }),
+    body: JSON.stringify(requestBody),
   });
   const { matches } = await res.json();
   lastMatches = matches;
 
-  const html = matches.length
+  const debugHtml = `<p class="hint">Searched indices [${requestBody.indices}] with expected values [${requestBody.expected_values}], tolerance ${requestBody.tolerance}, scales ${requestBody.scales ? `[${requestBody.scales}]` : "(common defaults)"}, span ${requestBody.span ? `[${requestBody.span}]` : "(whole message — none set)"}.</p>`;
+  const resultHtml = matches.length
     ? `<h3>Matches</h3><ul>${matches
         .map((m) => `<li>bytes [${m.start}-${m.end}], ${m.byte_order}-endian, scale ${m.scale}</li>`)
         .join("")}</ul>`
     : "<p class=\"hint\">No match found for the given expected values/tolerance/scales.</p>";
-  document.getElementById("analysis-results").innerHTML = html;
+  document.getElementById("analysis-results").innerHTML = debugHtml + resultHtml;
   renderAnalysisPanel();
 });
 
