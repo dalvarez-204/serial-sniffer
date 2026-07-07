@@ -65,7 +65,9 @@ td.direction-OUT { color: #ffb37c; }
 }
 #label-panel button { margin-right: 0.5rem; }
 
-#add-to-analysis { margin-bottom: 1rem; }
+.hidden { display: none; }
+
+#add-to-analysis, #clear-selection { margin-bottom: 1rem; margin-right: 0.5rem; }
 
 #analysis-panel {
   margin-top: 1.5rem;

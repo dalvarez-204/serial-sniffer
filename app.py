@@ -77,6 +77,14 @@ def api_messages():
     return jsonify({"messages": messages, "analysis": analysis, "labels": load_labels()})
 
 
+@app.route("/api/label/<int:index>", methods=["DELETE"])
+def api_delete_label(index):
+    labels = load_labels()
+    labels.pop(str(index), None)
+    save_labels(labels)
+    return jsonify({"ok": True})
+
+
 @app.route("/api/find_value", methods=["POST"])
 def api_find_value():
     payload = request.get_json()

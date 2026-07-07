@@ -2,6 +2,7 @@ let state = { messages: [], analysis: {}, labels: {}, activeIndex: null };
 let analysisSet = []; // [{index, hexBytes, ascii, expected: ""}]
 let lastMatches = [];
 let spanSelection = { start: null, end: null };
+let lastCheckedIndex = null;
 
 function formatTimestamp(epochSeconds) {
   const d = new Date(epochSeconds * 1000);
@@ -87,22 +88,49 @@ function render() {
   document.querySelectorAll(".message-row").forEach((row) => {
     row.addEventListener("click", (e) => {
       if (e.target.classList.contains("row-select")) return;
+      e.stopPropagation();
       openLabelPanel(Number(row.dataset.index));
     });
   });
 
   document.querySelectorAll(".row-select").forEach((cb) => {
-    cb.addEventListener("change", updateRowDimming);
+    cb.addEventListener("click", (e) => {
+      const index = Number(cb.dataset.index);
+      if (e.shiftKey && lastCheckedIndex !== null) {
+        const lo = Math.min(lastCheckedIndex, index);
+        const hi = Math.max(lastCheckedIndex, index);
+        document.querySelectorAll(".row-select").forEach((other) => {
+          const otherIndex = Number(other.dataset.index);
+          if (otherIndex >= lo && otherIndex <= hi) other.checked = cb.checked;
+        });
+      }
+      lastCheckedIndex = index;
+      updateSelectionUI();
+    });
   });
 }
 
-function updateRowDimming() {
+function updateSelectionUI() {
   const anyChecked = document.querySelector(".row-select:checked") !== null;
   document.querySelectorAll(".message-row").forEach((row) => {
     const checked = row.querySelector(".row-select").checked;
     row.classList.toggle("dimmed", anyChecked && !checked);
   });
+  document.getElementById("clear-selection").classList.toggle("hidden", !anyChecked);
 }
+
+document.getElementById("clear-selection").addEventListener("click", () => {
+  document.querySelectorAll(".row-select").forEach((cb) => { cb.checked = false; });
+  lastCheckedIndex = null;
+  updateSelectionUI();
+});
+
+document.addEventListener("click", (e) => {
+  const panel = document.getElementById("label-panel");
+  if (!panel.classList.contains("hidden") && !panel.contains(e.target)) {
+    panel.classList.add("hidden");
+  }
+});
 
 function openLabelPanel(index) {
   state.activeIndex = index;
@@ -127,6 +155,14 @@ document.getElementById("label-save").addEventListener("click", async () => {
     body: JSON.stringify({ index, name, note }),
   });
   state.labels[index] = { name, note };
+  document.getElementById("label-panel").classList.add("hidden");
+  render();
+});
+
+document.getElementById("label-remove").addEventListener("click", async () => {
+  const index = state.activeIndex;
+  await fetch(`/api/label/${index}`, { method: "DELETE" });
+  delete state.labels[index];
   document.getElementById("label-panel").classList.add("hidden");
   render();
 });
