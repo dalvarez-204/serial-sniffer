@@ -1,6 +1,15 @@
 let state = { messages: [], analysis: {}, labels: {}, activeIndex: null };
 let analysisSet = []; // [{index, hexBytes, ascii, expected: ""}]
 let lastMatches = [];
+let spanSelection = { start: null, end: null };
+
+function formatTimestamp(epochSeconds) {
+  const d = new Date(epochSeconds * 1000);
+  const pad = (n, len = 2) => String(n).padStart(len, "0");
+  const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+  return `${date} ${time}`;
+}
 
 async function loadData() {
   const res = await fetch("/api/messages");
@@ -61,7 +70,7 @@ function render() {
     html += `<td><input type="checkbox" class="row-select" data-index="${msg.index}"></td>`;
     html += `<td>${msg.index}</td>`;
     html += `<td class="direction-${msg.direction}">${msg.direction}</td>`;
-    html += `<td>${msg.timestamp.toFixed(3)}</td>`;
+    html += `<td>${formatTimestamp(msg.timestamp)}</td>`;
     for (let i = 0; i < maxLen; i++) {
       const byte = msg.hex_bytes[i];
       if (byte === undefined) { html += "<td></td>"; continue; }
@@ -80,6 +89,18 @@ function render() {
       if (e.target.classList.contains("row-select")) return;
       openLabelPanel(Number(row.dataset.index));
     });
+  });
+
+  document.querySelectorAll(".row-select").forEach((cb) => {
+    cb.addEventListener("change", updateRowDimming);
+  });
+}
+
+function updateRowDimming() {
+  const anyChecked = document.querySelector(".row-select:checked") !== null;
+  document.querySelectorAll(".message-row").forEach((row) => {
+    const checked = row.querySelector(".row-select").checked;
+    row.classList.toggle("dimmed", anyChecked && !checked);
   });
 }
 
@@ -120,6 +141,9 @@ document.getElementById("add-to-analysis").addEventListener("click", () => {
     return { index, hexBytes: msg.hex_bytes, ascii: msg.ascii, expected: "" };
   });
   lastMatches = [];
+  spanSelection = { start: null, end: null };
+  document.getElementById("span-start").value = "";
+  document.getElementById("span-end").value = "";
   document.getElementById("analysis-panel").classList.remove("hidden");
   renderAnalysisPanel();
 });
@@ -127,11 +151,20 @@ document.getElementById("add-to-analysis").addEventListener("click", () => {
 document.getElementById("clear-analysis").addEventListener("click", () => {
   analysisSet = [];
   lastMatches = [];
+  spanSelection = { start: null, end: null };
   document.getElementById("analysis-panel").classList.add("hidden");
 });
 
 function highlightClass(offset) {
   return lastMatches.some((m) => offset >= m.start && offset <= m.end) ? "match-highlight" : "";
+}
+
+function spanSelectClass(offset) {
+  if (spanSelection.start === null) return "";
+  if (spanSelection.end === null) return offset === spanSelection.start ? "span-select" : "";
+  const lo = Math.min(spanSelection.start, spanSelection.end);
+  const hi = Math.max(spanSelection.start, spanSelection.end);
+  return offset >= lo && offset <= hi ? "span-select" : "";
 }
 
 function renderAnalysisPanel() {
@@ -144,8 +177,9 @@ function renderAnalysisPanel() {
     html += `<tr><td>${msg.index}</td>`;
     for (let i = 0; i < maxLen; i++) {
       const byte = msg.hexBytes[i];
-      const cls = byte === undefined ? "" : highlightClass(i);
-      html += `<td class="byte ${cls}">${byte === undefined ? "" : byte}</td>`;
+      if (byte === undefined) { html += "<td></td>"; continue; }
+      const cls = `${highlightClass(i)} ${spanSelectClass(i)}`.trim();
+      html += `<td class="byte analysis-byte ${cls}" data-offset="${i}">${byte}</td>`;
     }
     html += `<td>${msg.ascii}</td>`;
     html += `<td><input type="text" class="expected-input" data-row="${row}" value="${msg.expected}" placeholder="e.g. 5.0"></td>`;
@@ -159,7 +193,34 @@ function renderAnalysisPanel() {
       analysisSet[Number(e.target.dataset.row)].expected = e.target.value;
     });
   });
+
+  document.querySelectorAll(".analysis-byte").forEach((cell) => {
+    cell.addEventListener("click", () => {
+      const offset = Number(cell.dataset.offset);
+      if (spanSelection.start === null || spanSelection.end !== null) {
+        spanSelection = { start: offset, end: null };
+      } else {
+        spanSelection.end = offset;
+        if (spanSelection.end < spanSelection.start) {
+          [spanSelection.start, spanSelection.end] = [spanSelection.end, spanSelection.start];
+        }
+      }
+      document.getElementById("span-start").value = spanSelection.start;
+      document.getElementById("span-end").value = spanSelection.end !== null ? spanSelection.end : "";
+      renderAnalysisPanel();
+    });
+  });
 }
+
+document.getElementById("span-start").addEventListener("input", (e) => {
+  spanSelection.start = e.target.value === "" ? null : Number(e.target.value);
+  renderAnalysisPanel();
+});
+
+document.getElementById("span-end").addEventListener("input", (e) => {
+  spanSelection.end = e.target.value === "" ? null : Number(e.target.value);
+  renderAnalysisPanel();
+});
 
 function readSpan() {
   const startVal = document.getElementById("span-start").value;

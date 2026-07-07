@@ -29,9 +29,10 @@ table { border-collapse: collapse; font-family: monospace; font-size: 0.9rem; }
 th, td { padding: 2px 6px; text-align: center; border-bottom: 1px solid #333; }
 th { color: #888; font-weight: normal; }
 
-tr.message-row { cursor: pointer; }
+tr.message-row { cursor: pointer; transition: opacity 0.15s; }
 tr.message-row:hover { background: #222; }
 tr.message-row.labeled { outline: 1px solid #4caf50; }
+tr.message-row.dimmed { opacity: 0.3; }
 
 td.byte { min-width: 1.6em; }
 td.byte.constant { background: #444; }
@@ -99,5 +100,8 @@ td.direction-OUT { color: #ffb37c; }
 .expected-input { width: 6rem; background: #111; color: #eee; border: 1px solid #444; }
 
 td.byte.match-highlight { background: #1a3a5c; outline: 1px solid #4a9eff; }
+td.byte.analysis-byte { cursor: pointer; }
+td.byte.analysis-byte:hover { outline: 1px dashed #888; }
+td.byte.span-select { background: #4a2f70; outline: 1px solid #b98aff; }
 
 #analysis-results ul { margin: 0.5rem 0 0 1.2rem; padding: 0; }
