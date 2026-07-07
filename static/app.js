@@ -79,7 +79,7 @@ function render() {
       html += `<td class="byte ${cls}">${byte}</td>`;
     }
     html += `<td>${msg.ascii}</td>`;
-    html += `<td>${label ? label.name : ""}</td>`;
+    html += `<td class="label-cell">${label && label.name ? label.name : "+ label"}</td>`;
     html += "</tr>";
   }
   html += "</tbody></table>";
@@ -89,25 +89,35 @@ function render() {
     row.addEventListener("click", (e) => {
       if (e.target.classList.contains("row-select")) return;
       e.stopPropagation();
-      openLabelPanel(Number(row.dataset.index));
+      if (e.target.closest(".label-cell")) {
+        openLabelPanel(Number(row.dataset.index));
+        return;
+      }
+      const cb = row.querySelector(".row-select");
+      cb.checked = !cb.checked;
+      applySelectionClick(Number(row.dataset.index), cb.checked, e.shiftKey);
     });
   });
 
   document.querySelectorAll(".row-select").forEach((cb) => {
     cb.addEventListener("click", (e) => {
-      const index = Number(cb.dataset.index);
-      if (e.shiftKey && lastCheckedIndex !== null) {
-        const lo = Math.min(lastCheckedIndex, index);
-        const hi = Math.max(lastCheckedIndex, index);
-        document.querySelectorAll(".row-select").forEach((other) => {
-          const otherIndex = Number(other.dataset.index);
-          if (otherIndex >= lo && otherIndex <= hi) other.checked = cb.checked;
-        });
-      }
-      lastCheckedIndex = index;
-      updateSelectionUI();
+      e.stopPropagation();
+      applySelectionClick(Number(cb.dataset.index), cb.checked, e.shiftKey);
     });
   });
+}
+
+function applySelectionClick(index, checked, shiftKey) {
+  if (shiftKey && lastCheckedIndex !== null) {
+    const lo = Math.min(lastCheckedIndex, index);
+    const hi = Math.max(lastCheckedIndex, index);
+    document.querySelectorAll(".row-select").forEach((other) => {
+      const otherIndex = Number(other.dataset.index);
+      if (otherIndex >= lo && otherIndex <= hi) other.checked = checked;
+    });
+  }
+  lastCheckedIndex = index;
+  updateSelectionUI();
 }
 
 function updateSelectionUI() {
@@ -319,6 +329,36 @@ document.getElementById("search-btn").addEventListener("click", async () => {
     : "<p class=\"hint\">No match found for the given expected values/tolerance/scales.</p>";
   document.getElementById("analysis-results").innerHTML = html;
   renderAnalysisPanel();
+});
+
+document.getElementById("clear-captures").addEventListener("click", async () => {
+  if (!confirm("Clear all captured messages and labels? This can't be undone.")) return;
+  await fetch("/api/capture", { method: "DELETE" });
+  analysisSet = [];
+  lastMatches = [];
+  document.getElementById("analysis-panel").classList.add("hidden");
+  await loadData();
+});
+
+let pollingEnabled = false;
+let pollingInterval = null;
+
+function setPolling(enabled) {
+  pollingEnabled = enabled;
+  document.getElementById("toggle-polling").textContent = enabled
+    ? "Stop checking for new messages"
+    : "Check for new messages";
+  document.getElementById("toggle-polling").classList.toggle("active", enabled);
+  if (enabled) {
+    pollingInterval = setInterval(loadData, 2000);
+  } else if (pollingInterval) {
+    clearInterval(pollingInterval);
+    pollingInterval = null;
+  }
+}
+
+document.getElementById("toggle-polling").addEventListener("click", () => {
+  setPolling(!pollingEnabled);
 });
 
 loadData();

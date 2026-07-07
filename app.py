@@ -77,6 +77,15 @@ def api_messages():
     return jsonify({"messages": messages, "analysis": analysis, "labels": load_labels()})
 
 
+@app.route("/api/capture", methods=["DELETE"])
+def api_clear_capture():
+    if os.path.exists(CAPTURE_FILE):
+        os.remove(CAPTURE_FILE)
+    if os.path.exists(LABELS_FILE):
+        os.remove(LABELS_FILE)
+    return jsonify({"ok": True})
+
+
 @app.route("/api/label/<int:index>", methods=["DELETE"])
 def api_delete_label(index):
     labels = load_labels()
