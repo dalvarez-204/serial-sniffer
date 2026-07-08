@@ -132,14 +132,18 @@ def find_scaled_value(
     length = len(messages[0])
     scales = scales if scales is not None else COMMON_SCALES
     spans = [span] if span is not None else [(s,e) for s in range(length) for e in range(s,length)]
+    distinct_expected = len(set(expected_values))
 
     matches = []
     for start, end in spans:
         for order in ("big", "little"):
             raws = [int.from_bytes(m[start:end + 1], order) for m in messages]
             for scale in scales:
+                targets = [round(v*scale) for v in expected_values]
+                if len(set(targets)) < distinct_expected:
+                    continue
                 if all(
-                    abs(raws[i] - round(expected_values[i] * scale)) <= tolerance
+                    abs(raws[i] - targets[i]) <= tolerance
                     for i in range(len(messages))
                 ):
                     matches.append({

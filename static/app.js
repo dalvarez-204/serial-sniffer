@@ -1,8 +1,13 @@
-let state = { messages: [], analysis: {}, labels: {}, activeIndex: null };
+let state = { messages: [], analysis: {}, labels: {}, deciphered: {}, activeIndex: null };
 let analysisSet = []; // [{index, hexBytes, ascii, expected: ""}]
 let lastMatches = [];
 let spanSelection = { start: null, end: null };
 let lastCheckedIndex = null;
+let analysisContext = null; // {label, direction} when the current analysis was launched from a label group
+
+function decipheredKey(label, direction) {
+  return `${label}::${direction}`;
+}
 
 function formatTimestamp(epochSeconds) {
   const d = new Date(epochSeconds * 1000);
@@ -75,7 +80,11 @@ function render() {
     for (let i = 0; i < maxLen; i++) {
       const byte = msg.hex_bytes[i];
       if (byte === undefined) { html += "<td></td>"; continue; }
-      const cls = byteClass(msg.group_key, i, state.analysis);
+      let cls = byteClass(msg.group_key, i, state.analysis);
+      if (label && label.name) {
+        const entry = state.deciphered[decipheredKey(label.name, msg.direction)];
+        if (entry && i >= entry.start && i <= entry.end) cls += " deciphered";
+      }
       html += `<td class="byte ${cls}">${byte}</td>`;
     }
     html += `<td>${msg.ascii}</td>`;
@@ -84,6 +93,7 @@ function render() {
   }
   html += "</tbody></table>";
   document.getElementById("capture-table").innerHTML = html;
+  renderLabelGroups();
 
   document.querySelectorAll(".message-row").forEach((row) => {
     row.addEventListener("click", (e) => {
@@ -144,12 +154,56 @@ document.addEventListener("click", (e) => {
 
 function openLabelPanel(index) {
   state.activeIndex = index;
-  const label = state.labels[index] || { name: "", note: "" };
+  const label = state.labels[index] || { name: "", note: "", value: "" };
   document.getElementById("label-index").textContent = index;
-  document.getElementById("label-name").value = label.name;
-  document.getElementById("label-notes").value = label.note;
+  document.getElementById("label-name").value = label.name || "";
+  document.getElementById("label-value").value = label.value ?? "";
+  document.getElementById("label-notes").value = label.note || "";
+  hideNameSuggestions();
   document.getElementById("label-panel").classList.remove("hidden");
 }
+
+function getKnownLabelNames() {
+  const names = new Set();
+  Object.values(state.labels).forEach((l) => { if (l && l.name) names.add(l.name); });
+  Object.values(state.deciphered).forEach((d) => { if (d && d.label) names.add(d.label); });
+  return Array.from(names).sort();
+}
+
+function hideNameSuggestions() {
+  const box = document.getElementById("label-name-suggestions");
+  box.classList.add("hidden");
+  box.innerHTML = "";
+}
+
+function renderNameSuggestions(query) {
+  const box = document.getElementById("label-name-suggestions");
+  if (!query) {
+    hideNameSuggestions();
+    return;
+  }
+  const matches = getKnownLabelNames().filter((n) => n.toLowerCase().includes(query.toLowerCase()));
+  if (matches.length === 0) {
+    hideNameSuggestions();
+    return;
+  }
+  box.innerHTML = matches.map((n) => `<div class="suggestion-item">${n}</div>`).join("");
+  box.classList.remove("hidden");
+
+  box.querySelectorAll(".suggestion-item").forEach((item) => {
+    item.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      document.getElementById("label-name").value = item.textContent;
+      hideNameSuggestions();
+    });
+  });
+}
+
+document.getElementById("label-name").addEventListener("input", (e) => {
+  renderNameSuggestions(e.target.value);
+});
+
+document.getElementById("label-name").addEventListener("blur", hideNameSuggestions);
 
 document.getElementById("label-panel").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && e.target.id !== "label-notes") {
@@ -166,12 +220,14 @@ document.getElementById("label-save").addEventListener("click", async () => {
   const index = state.activeIndex;
   const name = document.getElementById("label-name").value;
   const note = document.getElementById("label-notes").value;
+  const valueRaw = document.getElementById("label-value").value.trim();
+  const value = valueRaw === "" ? null : Number(valueRaw);
   await fetch("/api/label", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ index, name, note }),
+    body: JSON.stringify({ index, name, note, value }),
   });
-  state.labels[index] = { name, note };
+  state.labels[index] = { name, note, value };
   document.getElementById("label-panel").classList.add("hidden");
   render();
 });
@@ -195,6 +251,7 @@ document.getElementById("add-to-analysis").addEventListener("click", () => {
   });
   lastMatches = [];
   spanSelection = { start: null, end: null };
+  analysisContext = null;
   document.getElementById("span-start").value = "";
   document.getElementById("span-end").value = "";
   document.getElementById("analysis-panel").classList.remove("hidden");
@@ -205,6 +262,7 @@ document.getElementById("clear-analysis").addEventListener("click", () => {
   analysisSet = [];
   lastMatches = [];
   spanSelection = { start: null, end: null };
+  analysisContext = null;
   document.getElementById("analysis-panel").classList.add("hidden");
 });
 
@@ -310,7 +368,7 @@ document.getElementById("probe-btn").addEventListener("click", () => {
   renderAnalysisPanel();
 });
 
-document.getElementById("search-btn").addEventListener("click", async () => {
+async function runSearch() {
   const expectedValues = analysisSet.map((m) => parseFloat(m.expected));
   if (expectedValues.some((v) => Number.isNaN(v))) {
     document.getElementById("analysis-results").innerHTML =
@@ -338,14 +396,99 @@ document.getElementById("search-btn").addEventListener("click", async () => {
   lastMatches = matches;
 
   const debugHtml = `<p class="hint">Searched indices [${requestBody.indices}] with expected values [${requestBody.expected_values}], tolerance ${requestBody.tolerance}, scales ${requestBody.scales ? `[${requestBody.scales}]` : "(common defaults)"}, span ${requestBody.span ? `[${requestBody.span}]` : "(whole message — none set)"}.</p>`;
+
   const resultHtml = matches.length
     ? `<h3>Matches</h3><ul>${matches
-        .map((m) => `<li>bytes [${m.start}-${m.end}], ${m.byte_order}-endian, scale ${m.scale}</li>`)
+        .map((m, i) => {
+          const saveBtn = analysisContext
+            ? ` <button class="save-deciphered-btn" data-match-index="${i}">Mark deciphered for "${analysisContext.label}" (${analysisContext.direction})</button>`
+            : "";
+          return `<li>bytes [${m.start}-${m.end}], ${m.byte_order}-endian, scale ${m.scale}${saveBtn}</li>`;
+        })
         .join("")}</ul>`
     : "<p class=\"hint\">No match found for the given expected values/tolerance/scales.</p>";
   document.getElementById("analysis-results").innerHTML = debugHtml + resultHtml;
   renderAnalysisPanel();
-});
+
+  document.querySelectorAll(".save-deciphered-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const match = matches[Number(btn.dataset.matchIndex)];
+      await fetch("/api/deciphered", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          label: analysisContext.label,
+          direction: analysisContext.direction,
+          start: match.start,
+          end: match.end,
+          byte_order: match.byte_order,
+          scale: match.scale,
+        }),
+      });
+      await loadData();
+    });
+  });
+}
+
+document.getElementById("search-btn").addEventListener("click", runSearch);
+
+function renderLabelGroups() {
+  const groups = {};
+  for (const [indexStr, label] of Object.entries(state.labels)) {
+    if (!label || !label.name) continue;
+    const index = Number(indexStr);
+    const msg = state.messages.find((m) => m.index === index);
+    if (!msg) continue;
+    const key = decipheredKey(label.name, msg.direction);
+    groups[key] = groups[key] || { name: label.name, direction: msg.direction, members: [] };
+    const value = parseFloat(label.value);
+    groups[key].members.push({ index, value: Number.isNaN(value) ? null : value });
+  }
+
+  const container = document.getElementById("label-groups");
+  const keys = Object.keys(groups);
+  if (keys.length === 0) {
+    container.innerHTML = "";
+    return;
+  }
+
+  let html = "<h2>Label groups</h2><ul>";
+  for (const key of keys) {
+    const group = groups[key];
+    const withValues = group.members.filter((m) => m.value !== null);
+    const distinctValues = new Set(withValues.map((m) => m.value)).size;
+    const deciphered = state.deciphered[key];
+    const decipheredNote = deciphered
+      ? ` — <span class="deciphered-note">deciphered: bytes [${deciphered.start}-${deciphered.end}], ${deciphered.byte_order}-endian, scale ${deciphered.scale}</span>`
+      : "";
+    html += `<li>
+      <strong>${group.name}</strong> (${group.direction}, ${group.members.length} labeled, ${withValues.length} with a value, ${distinctValues} distinct)${decipheredNote}
+      <button class="analyze-group-btn" data-key="${key}" ${distinctValues < 2 ? "disabled" : ""}>Analyze</button>
+    </li>`;
+  }
+  html += "</ul>";
+  container.innerHTML = html;
+
+  document.querySelectorAll(".analyze-group-btn").forEach((btn) => {
+    btn.addEventListener("click", () => analyzeLabelGroup(groups[btn.dataset.key]));
+  });
+}
+
+function analyzeLabelGroup(group) {
+  const withValues = group.members.filter((m) => m.value !== null);
+  analysisSet = withValues.map((m) => {
+    const msg = state.messages.find((mm) => mm.index === m.index);
+    return { index: m.index, hexBytes: msg.hex_bytes, ascii: msg.ascii, expected: String(m.value) };
+  });
+  lastMatches = [];
+  spanSelection = { start: null, end: null };
+  document.getElementById("span-start").value = "";
+  document.getElementById("span-end").value = "";
+  analysisContext = { label: group.name, direction: group.direction };
+  document.getElementById("analysis-panel").classList.remove("hidden");
+  renderAnalysisPanel();
+  runSearch();
+}
 
 document.getElementById("clear-captures").addEventListener("click", async () => {
   if (!confirm("Clear all captured messages and labels? This can't be undone.")) return;

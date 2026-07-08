@@ -22,6 +22,8 @@
   </div>
   <div id="capture-table"></div>
 
+  <div id="label-groups"></div>
+
   <div id="analysis-panel" class="hidden">
     <h2>Analysis</h2>
     <div id="analysis-messages"></div>
@@ -41,7 +43,11 @@
   <div id="label-panel" class="hidden">
     <h2>Label message <span id="label-index"></span></h2>
     <label>Name
-      <input id="label-name" type="text" placeholder="e.g. set_voltage">
+      <input id="label-name" type="text" placeholder="e.g. set_voltage" autocomplete="off">
+      <div id="label-name-suggestions" class="suggestions hidden"></div>
+    </label>
+    <label>Value (numeric, e.g. the voltage you set)
+      <input id="label-value" type="text" placeholder="e.g. 5.0">
     </label>
     <label>Notes
       <textarea id="label-notes" placeholder="what did this do / what value did you set?"></textarea>

@@ -8,6 +8,11 @@ app = Flask(__name__)
 
 CAPTURE_FILE = "capture_log.jsonl"
 LABELS_FILE = "labels.json"
+DECIPHERED_FILE = "deciphered.json"
+
+
+def deciphered_key(label, direction):
+    return f"{label}::{direction}"
 
 
 def group_key(direction, length):
@@ -64,6 +69,18 @@ def save_labels(labels):
         json.dump(labels, f, indent=2)
 
 
+def load_deciphered():
+    if os.path.exists(DECIPHERED_FILE):
+        with open(DECIPHERED_FILE) as f:
+            return json.load(f)
+    return {}
+
+
+def save_deciphered(deciphered):
+    with open(DECIPHERED_FILE, "w") as f:
+        json.dump(deciphered, f, indent=2)
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -72,9 +89,14 @@ def index():
 @app.route("/api/messages")
 def api_messages():
     if not os.path.exists(CAPTURE_FILE):
-        return jsonify({"messages": [], "analysis": {}, "labels": {}})
+        return jsonify({"messages": [], "analysis": {}, "labels": {}, "deciphered": load_deciphered()})
     messages, analysis = build_capture_view(CAPTURE_FILE)
-    return jsonify({"messages": messages, "analysis": analysis, "labels": load_labels()})
+    return jsonify({
+        "messages": messages,
+        "analysis": analysis,
+        "labels": load_labels(),
+        "deciphered": load_deciphered(),
+    })
 
 
 @app.route("/api/capture", methods=["DELETE"])
@@ -121,8 +143,26 @@ def api_label():
     labels[index] = {
         "name": payload.get("name", ""),
         "note": payload.get("note", ""),
+        "value": payload.get("value"),
     }
     save_labels(labels)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/deciphered", methods=["POST"])
+def api_save_deciphered():
+    payload = request.get_json()
+    key = deciphered_key(payload["label"], payload["direction"])
+    deciphered = load_deciphered()
+    deciphered[key] = {
+        "label": payload["label"],
+        "direction": payload["direction"],
+        "start": payload["start"],
+        "end": payload["end"],
+        "byte_order": payload["byte_order"],
+        "scale": payload["scale"],
+    }
+    save_deciphered(deciphered)
     return jsonify({"ok": True})
 
 
