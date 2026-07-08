@@ -15,20 +15,23 @@
   </p>
   <div id="confidence-warnings"></div>
 
-  <div class="toolbar">
-    <label>Interface <input id="capture-interface" type="text" placeholder="usbmon3"></label>
-    <label>Device address <input id="capture-device" type="number" placeholder="2"></label>
-    <button id="save-capture-config">Save capture settings</button>
-    <button id="toggle-capture">Enable capture</button>
-    <button id="scan-lsusb">Scan USB devices (lsusb)</button>
+  <h2 id="capture-settings-toggle" class="collapsible-heading">&#9662; Capture settings</h2>
+  <div id="capture-settings-body">
+    <div class="toolbar">
+      <label>Interface <input id="capture-interface" type="text" placeholder="usbmon3"></label>
+      <label>Device address <input id="capture-device" type="number" placeholder="2"></label>
+      <button id="save-capture-config">Save capture settings</button>
+      <button id="toggle-capture">Connect</button>
+      <button id="scan-lsusb">Scan USB devices (lsusb)</button>
+    </div>
+    <p id="capture-status" class="hint"></p>
+    <pre id="lsusb-output" class="hidden"></pre>
   </div>
-  <p id="capture-status" class="hint"></p>
-  <pre id="lsusb-output" class="hidden"></pre>
 
   <div class="toolbar">
     <button id="add-to-analysis">Add selected to Analysis</button>
     <button id="clear-selection" class="hidden">Clear selection</button>
-    <button id="toggle-polling">Check for new messages</button>
+    <button id="toggle-polling">Enable capture</button>
     <button id="clear-captures" class="danger">Clear all captures</button>
   </div>
   <div id="capture-table"></div>

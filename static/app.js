@@ -19,8 +19,15 @@ function formatTimestamp(epochSeconds) {
 
 async function loadData() {
   const res = await fetch("/api/messages");
-  state = { ...state, ...(await res.json()) };
-  render();
+  const fetched = await res.json();
+  const unchanged = JSON.stringify(fetched) === JSON.stringify({
+    messages: state.messages,
+    analysis: state.analysis,
+    labels: state.labels,
+    deciphered: state.deciphered,
+  });
+  state = { ...state, ...fetched };
+  if (!unchanged) render();
 }
 
 function byteClass(groupKey, offset, analysis) {
@@ -58,6 +65,11 @@ function confidenceWarnings(analysis) {
 }
 
 function render() {
+  const scrollY = window.scrollY;
+  const previouslySelected = new Set(
+    Array.from(document.querySelectorAll(".row-select:checked")).map((cb) => Number(cb.dataset.index))
+  );
+
   const warnings = confidenceWarnings(state.analysis);
   const warningHtml = warnings.length
     ? `<div class="warning-banner"><strong>Low-confidence groups:</strong><ul>${warnings.map((w) => `<li>${w}</li>`).join("")}</ul></div>`
@@ -114,10 +126,16 @@ function render() {
       e.stopPropagation();
       applySelectionClick(Number(cb.dataset.index), cb.checked, e.shiftKey);
     });
+    if (previouslySelected.has(Number(cb.dataset.index))) cb.checked = true;
   });
+  if (previouslySelected.size > 0) updateSelectionUI();
+  window.scrollTo(0, scrollY);
 }
 
 function applySelectionClick(index, checked, shiftKey) {
+  if (checked && pollingEnabled) {
+    setPolling(false);
+  }
   if (shiftKey && lastCheckedIndex !== null) {
     const lo = Math.min(lastCheckedIndex, index);
     const hi = Math.max(lastCheckedIndex, index);
@@ -516,11 +534,11 @@ let pollingInterval = null;
 function setPolling(enabled) {
   pollingEnabled = enabled;
   document.getElementById("toggle-polling").textContent = enabled
-    ? "Stop checking for new messages"
-    : "Check for new messages";
+    ? "Disable capture"
+    : "Enable capture";
   document.getElementById("toggle-polling").classList.toggle("active", enabled);
   if (enabled) {
-    pollingInterval = setInterval(loadData, 2000);
+    pollingInterval = setInterval(loadData, 150);
   } else if (pollingInterval) {
     clearInterval(pollingInterval);
     pollingInterval = null;
@@ -557,6 +575,12 @@ document.getElementById("scan-lsusb").addEventListener("click", async () => {
   box.textContent = output;
 });
 
+document.getElementById("capture-settings-toggle").addEventListener("click", () => {
+  const body = document.getElementById("capture-settings-body");
+  const nowHidden = body.classList.toggle("hidden");
+  document.getElementById("capture-settings-toggle").innerHTML = (nowHidden ? "&#9656;" : "&#9662;") + " Capture settings";
+});
+
 let captureEnabled = false;
 
 async function checkCaptureStatus() {
@@ -564,7 +588,7 @@ async function checkCaptureStatus() {
   const status = await res.json();
   captureEnabled = status.enabled;
   const btn = document.getElementById("toggle-capture");
-  btn.textContent = captureEnabled ? "Disable capture" : "Enable capture";
+  btn.textContent = captureEnabled ? "Disconnect" : "Connect";
   btn.classList.toggle("active", captureEnabled);
 
   const statusEl = document.getElementById("capture-status");
