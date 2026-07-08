@@ -39,6 +39,12 @@
 
   <div id="label-groups"></div>
 
+  <div id="monitor-panel">
+    <h2>👁 Monitor</h2>
+    <p class="hint">Bytes you're not confident enough to call "deciphered" yet, but want to keep an eye on — flags when a labeled message's reading suddenly breaks from what's expected.</p>
+    <div id="monitor-list"></div>
+  </div>
+
   <div id="analysis-panel" class="hidden">
     <h2>Analysis</h2>
     <div id="analysis-messages"></div>
@@ -48,8 +54,8 @@
       <button id="clear-span" type="button">Clear span</button>
       <label>Tolerance <input id="tolerance" type="number" min="0" value="0"></label>
       <label>Scales (comma-separated, expressions ok, blank = try common ones) <input id="scales" type="text" placeholder="e.g. 1, 100, 255/3.3"></label>
-      <label>Min value (optional) <input id="value-min" type="text" placeholder="e.g. 0"></label>
-      <label>Max value (optional) <input id="value-max" type="text" placeholder="e.g. 3.3"></label>
+      <label>Min value the device can represent (optional, default 0) <input id="value-min" type="text" placeholder="e.g. 0"></label>
+      <label>Max value the device can represent (optional) <input id="value-max" type="text" placeholder="e.g. 3.3"></label>
       <button id="probe-btn">Probe span (decode only)</button>
       <button id="search-btn">Find scaled value</button>
       <button id="clear-analysis">Clear analysis</button>

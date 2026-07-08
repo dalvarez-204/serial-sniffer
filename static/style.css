@@ -150,6 +150,14 @@ td.label-cell:hover { color: #eee; text-decoration: underline dotted; }
 .expected-input { width: 6rem; background: #111; color: #eee; border: 1px solid #444; }
 
 td.byte.match-highlight { background: #1a3a5c; outline: 1px solid #4a9eff; }
+
+/* faint predicted constant/checksum/data hints in the analysis grid — scoped
+   so the main table keeps its bolder coloring; match-highlight still wins
+   where a byte is both predicted and an actual search match */
+#analysis-messages td.byte.constant { background: #2a2a2a; }
+#analysis-messages td.byte.checksum { background: #3a2c14; }
+#analysis-messages td.byte.data { background: #16241a; }
+#analysis-messages td.byte.match-highlight { background: #1a3a5c; }
 td.byte.deciphered { box-shadow: 0 0 8px 2px rgba(255, 215, 0, 0.85) inset; outline: 1px solid gold; }
 td.byte.deciphered.data { background: #2a2308; }
 
@@ -165,10 +173,31 @@ td.byte.deciphered.data { background: #2a2308; }
 #label-groups .deciphered-note { color: gold; }
 #label-groups button { margin-left: 0.75rem; }
 
+.precision-note { color: #ffa500; }
+
+td.byte.monitored-byte { outline: 1px dashed #4dd0e1; }
+.eye-icon { margin-left: 0.3rem; }
+
+tr.message-row.anomaly { outline: 2px solid #ff5252; }
+
+#monitor-panel { margin-top: 1.5rem; }
+#monitor-list ul { list-style: none; margin: 0; padding: 0; }
+#monitor-list li {
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.4rem;
+  background: #171717;
+  border: 1px solid #333;
+  border-radius: 6px;
+}
+#monitor-list button { margin-left: 0.75rem; }
+.monitor-ok { color: #4caf50; }
+
 .save-deciphered-btn { margin-left: 0.5rem; }
 td.byte.analysis-byte { cursor: pointer; }
 td.byte.analysis-byte:hover { outline: 1px dashed #888; }
-td.byte.span-select { background: #4a2f70; outline: 1px solid #b98aff; }
+td.byte.span-start-marker { box-shadow: inset 3px 0 0 0 #b98aff; }
+td.byte.span-end-marker { box-shadow: inset -3px 0 0 0 #b98aff; }
+td.byte.span-start-marker.span-end-marker { box-shadow: inset 3px 0 0 0 #b98aff, inset -3px 0 0 0 #b98aff; }
 
 #analysis-results ul { margin: 0.5rem 0 0 1.2rem; padding: 0; }
 

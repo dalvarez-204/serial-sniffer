@@ -1,4 +1,4 @@
-let state = { messages: [], analysis: {}, labels: {}, deciphered: {}, activeIndex: null };
+let state = { messages: [], analysis: {}, labels: {}, deciphered: {}, monitors: {}, activeIndex: null };
 let analysisSet = []; // [{index, hexBytes, ascii, expected: ""}]
 let lastMatches = [];
 let spanSelection = { start: null, end: null };
@@ -64,6 +64,18 @@ function confidenceWarnings(analysis) {
   return warnings;
 }
 
+function decodeHexSpan(hexBytes, start, end, order) {
+  const slice = hexBytes.slice(start, end + 1);
+  const ordered = order === "little" ? [...slice].reverse() : slice;
+  return parseInt(ordered.join(""), 16);
+}
+
+function getActiveMonitorForMessage(msg) {
+  const label = state.labels[msg.index];
+  if (!label || !label.name) return null;
+  return state.monitors[decipheredKey(label.name, msg.direction)] || null;
+}
+
 function render() {
   const scrollY = window.scrollY;
   const previouslySelected = new Set(
@@ -84,7 +96,13 @@ function render() {
   for (const msg of state.messages) {
     const label = state.labels[msg.index];
     const labeledClass = label ? "labeled" : "";
-    html += `<tr class="message-row ${labeledClass}" data-index="${msg.index}">`;
+    const monitor = getActiveMonitorForMessage(msg);
+    let isAnomaly = false;
+    if (monitor) {
+      const value = decodeHexSpan(msg.hex_bytes, monitor.start, monitor.end, monitor.byte_order) / monitor.scale;
+      isAnomaly = Math.abs(value - monitor.expected_reading) > monitor.tolerance;
+    }
+    html += `<tr class="message-row ${labeledClass} ${isAnomaly ? "anomaly" : ""}" data-index="${msg.index}">`;
     html += `<td><input type="checkbox" class="row-select" data-index="${msg.index}"></td>`;
     html += `<td>${msg.index}</td>`;
     html += `<td class="direction-${msg.direction}">${msg.direction}</td>`;
@@ -97,15 +115,18 @@ function render() {
         const entry = state.deciphered[decipheredKey(label.name, msg.direction)];
         if (entry && i >= entry.start && i <= entry.end) cls += " deciphered";
       }
+      if (monitor && i >= monitor.start && i <= monitor.end) cls += " monitored-byte";
       html += `<td class="byte ${cls}">${byte}</td>`;
     }
     html += `<td>${msg.ascii}</td>`;
-    html += `<td class="label-cell">${label && label.name ? label.name : "+ label"}</td>`;
+    const eyeIcon = monitor ? ` <span class="eye-icon" title="${isAnomaly ? "Anomaly detected!" : "Being monitored"}">${isAnomaly ? "👁⚠" : "👁"}</span>` : "";
+    html += `<td class="label-cell">${label && label.name ? label.name : "+ label"}${eyeIcon}</td>`;
     html += "</tr>";
   }
   html += "</tbody></table>";
   document.getElementById("capture-table").innerHTML = html;
   renderLabelGroups();
+  renderMonitorsPanel();
 
   document.querySelectorAll(".message-row").forEach((row) => {
     row.addEventListener("click", (e) => {
@@ -277,7 +298,7 @@ document.getElementById("add-to-analysis").addEventListener("click", () => {
   if (checked.length === 0) return;
   analysisSet = checked.map((index) => {
     const msg = state.messages.find((m) => m.index === index);
-    return { index, hexBytes: msg.hex_bytes, ascii: msg.ascii, expected: "" };
+    return { index, hexBytes: msg.hex_bytes, ascii: msg.ascii, expected: "", groupKey: msg.group_key };
   });
   lastMatches = [];
   spanSelection = { start: null, end: null };
@@ -304,10 +325,12 @@ function highlightClass(offset) {
 
 function spanSelectClass(offset) {
   if (spanSelection.start === null) return "";
-  if (spanSelection.end === null) return offset === spanSelection.start ? "span-select" : "";
-  const lo = Math.min(spanSelection.start, spanSelection.end);
-  const hi = Math.max(spanSelection.start, spanSelection.end);
-  return offset >= lo && offset <= hi ? "span-select" : "";
+  const lo = spanSelection.end === null ? spanSelection.start : Math.min(spanSelection.start, spanSelection.end);
+  const hi = spanSelection.end === null ? spanSelection.start : Math.max(spanSelection.start, spanSelection.end);
+  const classes = [];
+  if (offset === lo) classes.push("span-start-marker");
+  if (offset === hi) classes.push("span-end-marker");
+  return classes.join(" ");
 }
 
 function renderAnalysisPanel() {
@@ -321,7 +344,8 @@ function renderAnalysisPanel() {
     for (let i = 0; i < maxLen; i++) {
       const byte = msg.hexBytes[i];
       if (byte === undefined) { html += "<td></td>"; continue; }
-      const cls = `${highlightClass(i)} ${spanSelectClass(i)}`.trim();
+      const predicted = byteClass(msg.groupKey, i, state.analysis);
+      const cls = `${predicted} ${highlightClass(i)} ${spanSelectClass(i)}`.trim();
       html += `<td class="byte analysis-byte ${cls}" data-offset="${i}">${byte}</td>`;
     }
     html += `<td>${msg.ascii}</td>`;
@@ -413,6 +437,10 @@ function evalScaleExpression(expr) {
   }
 }
 
+function formatScale(scale) {
+  return Number.isInteger(scale) ? String(scale) : scale.toFixed(4);
+}
+
 function groupMatchesBySpan(matches) {
   const groups = new Map();
   for (const m of matches) {
@@ -423,6 +451,22 @@ function groupMatchesBySpan(matches) {
   return Array.from(groups.values()).sort(
     (a, b) => a.start - b.start || (a.end - a.start) - (b.end - b.start)
   );
+}
+
+function getSearchDirection() {
+  if (analysisContext) return analysisContext.direction;
+  const first = analysisSet[0];
+  if (!first) return null;
+  const msg = state.messages.find((m) => m.index === first.index);
+  return msg ? msg.direction : null;
+}
+
+function getKnownByteOrder(direction) {
+  if (!direction) return null;
+  for (const entry of Object.values(state.deciphered)) {
+    if (entry.direction === direction) return entry.byte_order;
+  }
+  return null;
 }
 
 async function runSearch() {
@@ -442,6 +486,8 @@ async function runSearch() {
   const maxRaw = document.getElementById("value-max").value.trim();
   const min_value = minRaw === "" ? null : Number(minRaw);
   const max_value = maxRaw === "" ? null : Number(maxRaw);
+  const searchDirection = getSearchDirection();
+  const byte_order = getKnownByteOrder(searchDirection);
   const requestBody = {
     indices: analysisSet.map((m) => m.index),
     expected_values: expectedValues,
@@ -450,6 +496,7 @@ async function runSearch() {
     span,
     min_value,
     max_value,
+    byte_order,
   };
 
   const res = await fetch("/api/find_value", {
@@ -460,20 +507,23 @@ async function runSearch() {
   const { matches } = await res.json();
   lastMatches = matches;
 
-  const rangeNote = min_value !== null && max_value !== null ? `, range [${min_value}, ${max_value}] (adds one derived scale per span)` : "";
-  const debugHtml = `<p class="hint">Searched indices [${requestBody.indices}] with expected values [${requestBody.expected_values}], tolerance ${requestBody.tolerance}, scales ${requestBody.scales ? `[${requestBody.scales}]` : "(common defaults)"}, span ${requestBody.span ? `[${requestBody.span}]` : "(whole message — none set)"}${rangeNote}.</p>`;
+  const rangeNote = min_value !== null && max_value !== null ? `, device range [${min_value}, ${max_value}] (adds one derived precision-based scale per span)` : "";
+  const byteOrderNote = byte_order ? `, assuming <strong>${byte_order}-endian</strong> (a "${searchDirection}" field has already been deciphered with this order)` : "";
+  const debugHtml = `<p class="hint">Searched indices [${requestBody.indices}] with expected values [${requestBody.expected_values}], tolerance ${requestBody.tolerance}, scales ${requestBody.scales ? `[${requestBody.scales}]` : "(common defaults)"}, span ${requestBody.span ? `[${requestBody.span}]` : "(whole message — none set)"}${rangeNote}${byteOrderNote}.</p>`;
 
   const resultHtml = matches.length
     ? `<h3>Matches (${matches.length})</h3>${groupMatchesBySpan(matches)
         .map((group) => {
           const entriesHtml = group.entries
             .map((m) => {
+              const avgDecoded = m.decoded_values.reduce((a, b) => a + b, 0) / m.decoded_values.length;
               const saveBtn = analysisContext
-                ? ` <button class="save-deciphered-btn" data-start="${m.start}" data-end="${m.end}" data-order="${m.byte_order}" data-scale="${m.scale}">Mark deciphered for "${analysisContext.label}" (${analysisContext.direction})</button>`
+                ? ` <button class="save-deciphered-btn" data-start="${m.start}" data-end="${m.end}" data-order="${m.byte_order}" data-scale="${m.scale}">Mark deciphered for "${analysisContext.label}" (${analysisContext.direction})</button>
+                    <button class="watch-btn" data-start="${m.start}" data-end="${m.end}" data-order="${m.byte_order}" data-scale="${m.scale}" data-avg-decoded="${avgDecoded}">👁 Watch</button>`
                 : "";
               const decoded = m.decoded_values.map((v) => v.toFixed(3)).join(", ");
-              const precisionNote = m.precision ? ` (precision ${m.precision})` : "";
-              return `<li>${m.byte_order}-endian, scale ${m.scale}${precisionNote}${saveBtn}<br><span class="hint">decoded back: [${decoded}] — compare against your expected values [${requestBody.expected_values}]</span></li>`;
+              const precisionNote = m.precision ? ` <span class="precision-note">(precision ${m.precision})</span>` : "";
+              return `<li>${m.byte_order}-endian, scale ${formatScale(m.scale)}${precisionNote}${saveBtn}<br><span class="hint">decoded back: [${decoded}] — compare against your expected values [${requestBody.expected_values}]</span></li>`;
             })
             .join("");
           return `<div class="match-group"><h4>bytes [${group.start}-${group.end}] (width ${group.end - group.start + 1})</h4><ul>${entriesHtml}</ul></div>`;
@@ -500,9 +550,83 @@ async function runSearch() {
       await loadData();
     });
   });
+
+  document.querySelectorAll(".watch-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const defaultReading = Number(btn.dataset.avgDecoded).toFixed(3);
+      const readingInput = prompt("Expected reading for this monitor (flag if a labeled message deviates from this):", defaultReading);
+      if (readingInput === null || readingInput.trim() === "") return;
+      const toleranceInput = prompt("Allowed tolerance before flagging as an anomaly:", "0.1");
+      if (toleranceInput === null) return;
+      await fetch("/api/monitors", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          label: analysisContext.label,
+          direction: analysisContext.direction,
+          start: Number(btn.dataset.start),
+          end: Number(btn.dataset.end),
+          byte_order: btn.dataset.order,
+          scale: Number(btn.dataset.scale),
+          expected_reading: Number(readingInput),
+          tolerance: Number(toleranceInput) || 0,
+        }),
+      });
+      await loadData();
+    });
+  });
 }
 
 document.getElementById("search-btn").addEventListener("click", runSearch);
+
+function renderMonitorsPanel() {
+  const container = document.getElementById("monitor-list");
+  const keys = Object.keys(state.monitors);
+  if (keys.length === 0) {
+    container.innerHTML = '<p class="hint">No monitors yet — use the "👁 Watch" button on a search match to add one.</p>';
+    return;
+  }
+
+  let html = "<ul>";
+  for (const key of keys) {
+    const monitor = state.monitors[key];
+    const readings = state.messages
+      .filter((msg) => {
+        const label = state.labels[msg.index];
+        return label && label.name === monitor.label && msg.direction === monitor.direction;
+      })
+      .map((msg) => ({
+        index: msg.index,
+        value: decodeHexSpan(msg.hex_bytes, monitor.start, monitor.end, monitor.byte_order) / monitor.scale,
+      }));
+    const anomalies = readings.filter((r) => Math.abs(r.value - monitor.expected_reading) > monitor.tolerance);
+    const statusHtml =
+      readings.length === 0
+        ? '<span class="hint">no labeled messages yet</span>'
+        : anomalies.length > 0
+        ? `<span class="error-text">⚠ ANOMALY — #${anomalies.map((a) => `${a.index} (${a.value.toFixed(3)})`).join(", #")}</span>`
+        : `<span class="monitor-ok">✓ OK (${readings.length} reading${readings.length === 1 ? "" : "s"} checked)</span>`;
+
+    html += `<li>
+      <strong>${monitor.label}</strong> (${monitor.direction}), bytes [${monitor.start}-${monitor.end}], ${monitor.byte_order}-endian, scale ${formatScale(monitor.scale)} —
+      expecting ~${monitor.expected_reading} ± ${monitor.tolerance}: ${statusHtml}
+      <button class="stop-watch-btn" data-label="${monitor.label}" data-direction="${monitor.direction}">Stop watching</button>
+    </li>`;
+  }
+  html += "</ul>";
+  container.innerHTML = html;
+
+  document.querySelectorAll(".stop-watch-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      await fetch("/api/monitors", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label: btn.dataset.label, direction: btn.dataset.direction }),
+      });
+      await loadData();
+    });
+  });
+}
 
 function renderLabelGroups() {
   const groups = {};
@@ -550,7 +674,7 @@ function analyzeLabelGroup(group) {
   const withValues = group.members.filter((m) => m.value !== null);
   analysisSet = withValues.map((m) => {
     const msg = state.messages.find((mm) => mm.index === m.index);
-    return { index: m.index, hexBytes: msg.hex_bytes, ascii: msg.ascii, expected: String(m.value) };
+    return { index: m.index, hexBytes: msg.hex_bytes, ascii: msg.ascii, expected: String(m.value), groupKey: msg.group_key };
   });
   lastMatches = [];
   spanSelection = { start: null, end: null };

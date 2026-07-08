@@ -139,6 +139,7 @@ def find_scaled_value(
         span: tuple[int,int] | None = None,
         min_value: float = 0,
         max_value: float | None = None,
+        byte_order: str | None = None,
         ) -> list[dict]:
     length = len(messages[0])
     scale_candidates = [(s, None) for s in (scales if scales is not None else COMMON_SCALES)]
@@ -151,11 +152,12 @@ def find_scaled_value(
         spans = [(s, e) for s in range(region_start, region_end + 1) for e in range(s, region_end + 1)]
     else:
         spans = [(s, e) for s in range(length) for e in range(s, length)]
+    orders = (byte_order,) if byte_order is not None else ("big", "little")
     distinct_expected = len(set(expected_values))
 
     matches = []
     for start, end in spans:
-        for order in ("big", "little"):
+        for order in orders:
             raws = [int.from_bytes(m[start:end + 1], order) for m in messages]
             for scale, precision in scale_candidates:
                 targets = [round(v*scale) for v in expected_values]

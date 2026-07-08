@@ -24,6 +24,7 @@ CAPTURE_FILE = "capture_log.jsonl"
 LABELS_FILE = "labels.json"
 DECIPHERED_FILE = "deciphered.json"
 CAPTURE_CONFIG_FILE = "capture_config.json"
+MONITORS_FILE = "monitors.json"
 
 
 def deciphered_key(label, direction):
@@ -120,6 +121,18 @@ def save_deciphered(deciphered):
         json.dump(deciphered, f, indent=2)
 
 
+def load_monitors():
+    if os.path.exists(MONITORS_FILE):
+        with open(MONITORS_FILE) as f:
+            return json.load(f)
+    return {}
+
+
+def save_monitors(monitors):
+    with open(MONITORS_FILE, "w") as f:
+        json.dump(monitors, f, indent=2)
+
+
 # tshark runs continuously in the background once enabled; "enabled" only
 # gates whether incoming records get written to disk. This sidesteps
 # starting/stopping the subprocess on every toggle click. The one thing that
@@ -175,13 +188,14 @@ def index():
 @app.route("/api/messages")
 def api_messages():
     if not os.path.exists(CAPTURE_FILE):
-        return jsonify({"messages": [], "analysis": {}, "labels": {}, "deciphered": load_deciphered()})
+        return jsonify({"messages": [], "analysis": {}, "labels": {}, "deciphered": load_deciphered(), "monitors": load_monitors()})
     messages, analysis = build_capture_view(CAPTURE_FILE)
     return jsonify({
         "messages": messages,
         "analysis": analysis,
         "labels": load_labels(),
         "deciphered": load_deciphered(),
+        "monitors": load_monitors(),
     })
 
 
@@ -271,6 +285,7 @@ def api_find_value():
     if min_value is None:
         min_value = 0
     max_value = payload.get("max_value")
+    byte_order = payload.get("byte_order")
 
     if not os.path.exists(CAPTURE_FILE):
         return jsonify({"matches": []})
@@ -278,7 +293,7 @@ def api_find_value():
     records = list(load_capture_log(CAPTURE_FILE))
     messages = [records[i][2] for i in indices]
 
-    matches = find_scaled_value(messages, expected_values, tolerance, scales, span, min_value, max_value)
+    matches = find_scaled_value(messages, expected_values, tolerance, scales, span, min_value, max_value, byte_order)
     return jsonify({"matches": matches})
 
 
@@ -310,6 +325,35 @@ def api_save_deciphered():
         "scale": payload["scale"],
     }
     save_deciphered(deciphered)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/monitors", methods=["POST"])
+def api_save_monitor():
+    payload = request.get_json()
+    key = deciphered_key(payload["label"], payload["direction"])
+    monitors = load_monitors()
+    monitors[key] = {
+        "label": payload["label"],
+        "direction": payload["direction"],
+        "start": payload["start"],
+        "end": payload["end"],
+        "byte_order": payload["byte_order"],
+        "scale": payload["scale"],
+        "expected_reading": payload["expected_reading"],
+        "tolerance": payload.get("tolerance", 0),
+    }
+    save_monitors(monitors)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/monitors", methods=["DELETE"])
+def api_delete_monitor():
+    payload = request.get_json()
+    key = deciphered_key(payload["label"], payload["direction"])
+    monitors = load_monitors()
+    monitors.pop(key, None)
+    save_monitors(monitors)
     return jsonify({"ok": True})
 
 
