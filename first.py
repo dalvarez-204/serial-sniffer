@@ -146,7 +146,11 @@ def find_scaled_value(
         # a precision (resolution/full-scale count) is only a usable scale once
         # we know the physical range it's spread across: scale = precision / range
         scale_candidates += [(p / (max_value - min_value), p) for p in COMMON_PRECISIONS]
-    spans = [span] if span is not None else [(s,e) for s in range(length) for e in range(s,length)]
+    if span is not None:
+        region_start, region_end = span
+        spans = [(s, e) for s in range(region_start, region_end + 1) for e in range(s, region_end + 1)]
+    else:
+        spans = [(s, e) for s in range(length) for e in range(s, length)]
     distinct_expected = len(set(expected_values))
 
     matches = []
