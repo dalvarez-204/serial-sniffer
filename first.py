@@ -2,7 +2,7 @@ import subprocess
 import json
 import sys
 
-def stream_usb_capture(interface: str, device_address: int): 
+def stream_usb_capture(interface: str, device_address: int, process_holder: dict | None = None):
     cmd = [
         "tshark", "-i", interface, "-l",
         "-Y", f"usb.device_address == {device_address} && usb.data_len > 0",
@@ -12,17 +12,25 @@ def stream_usb_capture(interface: str, device_address: int):
         "-e", "usb.capdata",
         "-E", "separator=,",
     ]
-    
+
     # spawn the subprocess now :))))
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, bufsize=1) # PIPE captures tshark's output
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1) # PIPE captures tshark's output
+    if process_holder is not None:
+        process_holder["proc"] = proc
     # text=True decodes output as text automatically, is this what we really want?
-    for line in proc.stdout: 
+    for line in proc.stdout:
         timestamp_str, endpoint_str, capdata_str = line.strip().split(",")
 
         timestamp = float(timestamp_str)
         direction = "IN" if int(endpoint_str, 16) & 0x80 else "OUT"
         data = bytes.fromhex(capdata_str.replace(":", ""))
         yield timestamp, direction, data
+
+    # loop only ends when tshark's stdout closes — either we terminated it on
+    # purpose (process_holder["stopped_intentionally"]) or it died on its own
+    proc.wait()
+    if process_holder is not None and proc.returncode != 0 and not process_holder.get("stopped_intentionally"):
+        process_holder["error"] = proc.stderr.read()
 
 def log_capture_to_file(interface: str, device_address: int, filepath: str):
     """ captures all of our information for the JSON file, which we will use as 

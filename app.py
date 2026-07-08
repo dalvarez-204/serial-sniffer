@@ -1,14 +1,17 @@
 from flask import Flask, jsonify, request, render_template
 import json
 import os
+import subprocess
+import threading
 
-from first import load_capture_log, analyze_byte_variability, find_checksum_range, find_scaled_value
+from first import load_capture_log, analyze_byte_variability, find_checksum_range, find_scaled_value, stream_usb_capture
 
 app = Flask(__name__)
 
 CAPTURE_FILE = "capture_log.jsonl"
 LABELS_FILE = "labels.json"
 DECIPHERED_FILE = "deciphered.json"
+CAPTURE_CONFIG_FILE = "capture_config.json"
 
 
 def deciphered_key(label, direction):
@@ -80,6 +83,19 @@ def save_labels(labels):
         json.dump(labels, f, indent=2)
 
 
+def load_capture_config():
+    defaults = {"interface": "usbmon3", "device_address": 2}
+    if os.path.exists(CAPTURE_CONFIG_FILE):
+        with open(CAPTURE_CONFIG_FILE) as f:
+            defaults.update(json.load(f))
+    return defaults
+
+
+def save_capture_config(config):
+    with open(CAPTURE_CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=2)
+
+
 def load_deciphered():
     if os.path.exists(DECIPHERED_FILE):
         with open(DECIPHERED_FILE) as f:
@@ -90,6 +106,53 @@ def load_deciphered():
 def save_deciphered(deciphered):
     with open(DECIPHERED_FILE, "w") as f:
         json.dump(deciphered, f, indent=2)
+
+
+# tshark runs continuously in the background once enabled; "enabled" only
+# gates whether incoming records get written to disk. This sidesteps
+# starting/stopping the subprocess on every toggle click. The one thing that
+# does need a restart is the interface/device_address themselves, since
+# those are baked into the tshark command at launch.
+capture_state = {"thread": None, "process_holder": {}, "enabled": False, "running": False}
+
+
+def _capture_loop(interface, device_address):
+    capture_state["process_holder"] = {}
+    capture_state["running"] = True
+    try:
+        for timestamp, direction, data in stream_usb_capture(interface, device_address, capture_state["process_holder"]):
+            if not capture_state["enabled"]:
+                continue
+            record = {"timestamp": timestamp, "direction": direction, "data_hex": data.hex()}
+            # reopen per write (not one long-held handle) so a "Clear all captures"
+            # delete while this thread is running doesn't leave us writing to an
+            # unlinked inode nothing can see
+            with open(CAPTURE_FILE, "a") as f:
+                f.write(json.dumps(record) + "\n")
+    finally:
+        capture_state["running"] = False
+
+
+def _start_capture_thread():
+    config = load_capture_config()
+    thread = threading.Thread(
+        target=_capture_loop,
+        args=(config["interface"], config["device_address"]),
+        daemon=True,
+    )
+    capture_state["thread"] = thread
+    thread.start()
+
+
+def _stop_capture_thread():
+    holder = capture_state.get("process_holder") or {}
+    proc = holder.get("proc")
+    if proc is not None:
+        holder["stopped_intentionally"] = True
+        proc.terminate()
+    thread = capture_state.get("thread")
+    if thread is not None:
+        thread.join(timeout=5)
 
 
 @app.route("/")
@@ -120,6 +183,60 @@ def api_clear_capture():
     _capture_cache["messages"] = None
     _capture_cache["analysis"] = None
     return jsonify({"ok": True})
+
+
+@app.route("/api/capture_config", methods=["GET"])
+def api_get_capture_config():
+    return jsonify(load_capture_config())
+
+
+@app.route("/api/capture_config", methods=["POST"])
+def api_save_capture_config():
+    payload = request.get_json()
+    config = {
+        "interface": payload.get("interface") or "usbmon3",
+        "device_address": int(payload.get("device_address") or 2),
+    }
+    save_capture_config(config)
+    if capture_state["running"]:
+        _stop_capture_thread()
+        _start_capture_thread()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/capture/enable", methods=["POST"])
+def api_enable_capture():
+    capture_state["enabled"] = True
+    if not capture_state["running"]:
+        _start_capture_thread()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/capture/disable", methods=["POST"])
+def api_disable_capture():
+    capture_state["enabled"] = False
+    return jsonify({"ok": True})
+
+
+@app.route("/api/capture/status")
+def api_capture_status():
+    holder = capture_state.get("process_holder") or {}
+    return jsonify({
+        "enabled": capture_state["enabled"],
+        "running": capture_state["running"],
+        "error": holder.get("error"),
+    })
+
+
+@app.route("/api/lsusb")
+def api_lsusb():
+    try:
+        result = subprocess.run(["lsusb"], capture_output=True, text=True, timeout=5)
+        return jsonify({"output": result.stdout or result.stderr})
+    except FileNotFoundError:
+        return jsonify({"output": "lsusb not found on this machine."})
+    except subprocess.TimeoutExpired:
+        return jsonify({"output": "lsusb timed out."})
 
 
 @app.route("/api/label/<int:index>", methods=["DELETE"])
@@ -181,4 +298,6 @@ def api_save_deciphered():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5001)
+    # use_reloader=False: the reloader restarts the whole process on file
+    # changes, which would silently orphan the background capture thread
+    app.run(debug=True, port=5001, use_reloader=False)

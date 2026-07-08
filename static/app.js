@@ -531,4 +531,59 @@ document.getElementById("toggle-polling").addEventListener("click", () => {
   setPolling(!pollingEnabled);
 });
 
+async function loadCaptureConfig() {
+  const res = await fetch("/api/capture_config");
+  const config = await res.json();
+  document.getElementById("capture-interface").value = config.interface;
+  document.getElementById("capture-device").value = config.device_address;
+}
+
+document.getElementById("save-capture-config").addEventListener("click", async () => {
+  const interfaceValue = document.getElementById("capture-interface").value.trim() || "usbmon3";
+  const deviceValue = Number(document.getElementById("capture-device").value) || 2;
+  await fetch("/api/capture_config", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ interface: interfaceValue, device_address: deviceValue }),
+  });
+});
+
+document.getElementById("scan-lsusb").addEventListener("click", async () => {
+  const box = document.getElementById("lsusb-output");
+  box.textContent = "Scanning...";
+  box.classList.remove("hidden");
+  const res = await fetch("/api/lsusb");
+  const { output } = await res.json();
+  box.textContent = output;
+});
+
+let captureEnabled = false;
+
+async function checkCaptureStatus() {
+  const res = await fetch("/api/capture/status");
+  const status = await res.json();
+  captureEnabled = status.enabled;
+  const btn = document.getElementById("toggle-capture");
+  btn.textContent = captureEnabled ? "Disable capture" : "Enable capture";
+  btn.classList.toggle("active", captureEnabled);
+
+  const statusEl = document.getElementById("capture-status");
+  if (status.error) {
+    statusEl.textContent = `Capture error: ${status.error}`;
+    statusEl.className = "error-text";
+  } else {
+    statusEl.textContent = `Capture thread: ${status.running ? "running" : "not running"}, writing: ${captureEnabled ? "on" : "off"}`;
+    statusEl.className = "hint";
+  }
+}
+
+document.getElementById("toggle-capture").addEventListener("click", async () => {
+  await fetch(`/api/capture/${captureEnabled ? "disable" : "enable"}`, { method: "POST" });
+  checkCaptureStatus();
+});
+
+setInterval(checkCaptureStatus, 3000);
+
+loadCaptureConfig();
+checkCaptureStatus();
 loadData();
