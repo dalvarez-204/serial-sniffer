@@ -171,3 +171,12 @@ td.byte.analysis-byte:hover { outline: 1px dashed #888; }
 td.byte.span-select { background: #4a2f70; outline: 1px solid #b98aff; }
 
 #analysis-results ul { margin: 0.5rem 0 0 1.2rem; padding: 0; }
+
+.match-group {
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.5rem;
+  background: #171717;
+}
+.match-group h4 { margin: 0 0 0.3rem 0; color: #ccc; }

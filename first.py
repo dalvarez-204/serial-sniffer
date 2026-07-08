@@ -141,11 +141,11 @@ def find_scaled_value(
         max_value: float | None = None,
         ) -> list[dict]:
     length = len(messages[0])
-    scales = list(scales) if scales is not None else list(COMMON_SCALES)
+    scale_candidates = [(s, None) for s in (scales if scales is not None else COMMON_SCALES)]
     if max_value is not None and max_value != min_value:
         # a precision (resolution/full-scale count) is only a usable scale once
         # we know the physical range it's spread across: scale = precision / range
-        scales += [p / (max_value - min_value) for p in COMMON_PRECISIONS]
+        scale_candidates += [(p / (max_value - min_value), p) for p in COMMON_PRECISIONS]
     spans = [span] if span is not None else [(s,e) for s in range(length) for e in range(s,length)]
     distinct_expected = len(set(expected_values))
 
@@ -153,8 +153,10 @@ def find_scaled_value(
     for start, end in spans:
         for order in ("big", "little"):
             raws = [int.from_bytes(m[start:end + 1], order) for m in messages]
-            for scale in scales:
+            for scale, precision in scale_candidates:
                 targets = [round(v*scale) for v in expected_values]
+                if any(v != 0 and t == 0 for v, t in zip(expected_values, targets)):
+                    continue
                 if len(set(targets)) < distinct_expected:
                     continue
                 if all(
@@ -166,6 +168,8 @@ def find_scaled_value(
                         "end": end,
                         "byte_order": order,
                         "scale": scale,
+                        "precision": precision,
+                        "decoded_values": [raws[i] / scale for i in range(len(messages))],
                     })
     return matches
 

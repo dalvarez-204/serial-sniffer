@@ -413,6 +413,18 @@ function evalScaleExpression(expr) {
   }
 }
 
+function groupMatchesBySpan(matches) {
+  const groups = new Map();
+  for (const m of matches) {
+    const key = `${m.start}-${m.end}`;
+    if (!groups.has(key)) groups.set(key, { start: m.start, end: m.end, entries: [] });
+    groups.get(key).entries.push(m);
+  }
+  return Array.from(groups.values()).sort(
+    (a, b) => a.start - b.start || (a.end - a.start) - (b.end - b.start)
+  );
+}
+
 async function runSearch() {
   const expectedValues = analysisSet.map((m) => parseFloat(m.expected));
   if (expectedValues.some((v) => Number.isNaN(v))) {
@@ -452,31 +464,37 @@ async function runSearch() {
   const debugHtml = `<p class="hint">Searched indices [${requestBody.indices}] with expected values [${requestBody.expected_values}], tolerance ${requestBody.tolerance}, scales ${requestBody.scales ? `[${requestBody.scales}]` : "(common defaults)"}, span ${requestBody.span ? `[${requestBody.span}]` : "(whole message — none set)"}${rangeNote}.</p>`;
 
   const resultHtml = matches.length
-    ? `<h3>Matches</h3><ul>${matches
-        .map((m, i) => {
-          const saveBtn = analysisContext
-            ? ` <button class="save-deciphered-btn" data-match-index="${i}">Mark deciphered for "${analysisContext.label}" (${analysisContext.direction})</button>`
-            : "";
-          return `<li>bytes [${m.start}-${m.end}], ${m.byte_order}-endian, scale ${m.scale}${saveBtn}</li>`;
+    ? `<h3>Matches (${matches.length})</h3>${groupMatchesBySpan(matches)
+        .map((group) => {
+          const entriesHtml = group.entries
+            .map((m) => {
+              const saveBtn = analysisContext
+                ? ` <button class="save-deciphered-btn" data-start="${m.start}" data-end="${m.end}" data-order="${m.byte_order}" data-scale="${m.scale}">Mark deciphered for "${analysisContext.label}" (${analysisContext.direction})</button>`
+                : "";
+              const decoded = m.decoded_values.map((v) => v.toFixed(3)).join(", ");
+              const precisionNote = m.precision ? ` (precision ${m.precision})` : "";
+              return `<li>${m.byte_order}-endian, scale ${m.scale}${precisionNote}${saveBtn}<br><span class="hint">decoded back: [${decoded}] — compare against your expected values [${requestBody.expected_values}]</span></li>`;
+            })
+            .join("");
+          return `<div class="match-group"><h4>bytes [${group.start}-${group.end}] (width ${group.end - group.start + 1})</h4><ul>${entriesHtml}</ul></div>`;
         })
-        .join("")}</ul>`
+        .join("")}`
     : "<p class=\"hint error-text\">No match found for the given expected values/tolerance/scales.</p>";
   document.getElementById("analysis-results").innerHTML = debugHtml + resultHtml;
   renderAnalysisPanel();
 
   document.querySelectorAll(".save-deciphered-btn").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      const match = matches[Number(btn.dataset.matchIndex)];
       await fetch("/api/deciphered", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           label: analysisContext.label,
           direction: analysisContext.direction,
-          start: match.start,
-          end: match.end,
-          byte_order: match.byte_order,
-          scale: match.scale,
+          start: Number(btn.dataset.start),
+          end: Number(btn.dataset.end),
+          byte_order: btn.dataset.order,
+          scale: Number(btn.dataset.scale),
         }),
       });
       await loadData();
