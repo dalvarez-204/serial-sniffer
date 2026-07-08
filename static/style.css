@@ -8,6 +8,7 @@ body {
 h1 { margin-bottom: 0.25rem; }
 
 .hint { color: #999; margin-bottom: 1rem; }
+.error-text { color: #ff6b6b; }
 
 .legend { padding: 0.1rem 0.4rem; border-radius: 4px; margin-right: 0.5rem; font-size: 0.85rem; }
 .legend.constant { background: #555; }
@@ -70,8 +71,8 @@ td.direction-OUT { color: #ffb37c; }
   margin-top: -0.8rem;
 }
 .suggestions.hidden { display: none; }
-.suggestion-item { padding: 0.4rem 0.6rem; cursor: pointer; }
-.suggestion-item:hover { background: #2c2c2c; }
+.suggestion-item { padding: 0.4rem 0.6rem; margin: 2px; border-radius: 3px; background: #2a2a2a; cursor: pointer; }
+.suggestion-item:hover { background: #383838; }
 
 #label-panel input, #label-panel textarea {
   width: 100%;

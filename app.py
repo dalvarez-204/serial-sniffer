@@ -19,7 +19,15 @@ def group_key(direction, length):
     return f"{direction}_{length}"
 
 
+_capture_cache = {"key": None, "messages": None, "analysis": None}
+
+
 def build_capture_view(filepath):
+    stat = os.stat(filepath)
+    cache_key = (stat.st_mtime_ns, stat.st_size)
+    if _capture_cache["key"] == cache_key:
+        return _capture_cache["messages"], _capture_cache["analysis"]
+
     records = list(load_capture_log(filepath))
 
     groups = {}
@@ -54,6 +62,9 @@ def build_capture_view(filepath):
             "group_key": group_key(direction, len(data)),
         })
 
+    _capture_cache["key"] = cache_key
+    _capture_cache["messages"] = messages_view
+    _capture_cache["analysis"] = analysis
     return messages_view, analysis
 
 
@@ -105,6 +116,9 @@ def api_clear_capture():
         os.remove(CAPTURE_FILE)
     if os.path.exists(LABELS_FILE):
         os.remove(LABELS_FILE)
+    _capture_cache["key"] = None
+    _capture_cache["messages"] = None
+    _capture_cache["analysis"] = None
     return jsonify({"ok": True})
 
 

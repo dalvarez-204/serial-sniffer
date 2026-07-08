@@ -203,6 +203,17 @@ document.getElementById("label-name").addEventListener("input", (e) => {
   renderNameSuggestions(e.target.value);
 });
 
+document.getElementById("label-name").addEventListener("keydown", (e) => {
+  if (e.key !== "Tab") return;
+  const box = document.getElementById("label-name-suggestions");
+  const first = box.querySelector(".suggestion-item");
+  if (!box.classList.contains("hidden") && first) {
+    e.preventDefault();
+    document.getElementById("label-name").value = first.textContent;
+    hideNameSuggestions();
+  }
+});
+
 document.getElementById("label-name").addEventListener("blur", hideNameSuggestions);
 
 document.getElementById("label-panel").addEventListener("keydown", (e) => {
@@ -406,7 +417,7 @@ async function runSearch() {
           return `<li>bytes [${m.start}-${m.end}], ${m.byte_order}-endian, scale ${m.scale}${saveBtn}</li>`;
         })
         .join("")}</ul>`
-    : "<p class=\"hint\">No match found for the given expected values/tolerance/scales.</p>";
+    : "<p class=\"hint error-text\">No match found for the given expected values/tolerance/scales.</p>";
   document.getElementById("analysis-results").innerHTML = debugHtml + resultHtml;
   renderAnalysisPanel();
 
