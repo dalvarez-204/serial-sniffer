@@ -1,12 +1,24 @@
 let state = { messages: [], analysis: {}, labels: {}, deciphered: {}, monitors: {}, activeIndex: null };
 let analysisSet = []; // [{index, hexBytes, ascii, expected: ""}]
 let lastMatches = [];
+let lastRawMatches = [];
+let lastDebugHtml = "";
+let lastExpectedValues = [];
 let spanSelection = { start: null, end: null };
 let lastCheckedIndex = null;
 let analysisContext = null; // {label, direction} when the current analysis was launched from a label group
 
 function decipheredKey(label, direction) {
   return `${label}::${direction}`;
+}
+
+function colorForLabel(name) {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue}, 65%, 60%)`;
 }
 
 function formatTimestamp(epochSeconds) {
@@ -95,14 +107,13 @@ function render() {
 
   for (const msg of state.messages) {
     const label = state.labels[msg.index];
-    const labeledClass = label ? "labeled" : "";
     const monitor = getActiveMonitorForMessage(msg);
     let isAnomaly = false;
     if (monitor) {
       const value = decodeHexSpan(msg.hex_bytes, monitor.start, monitor.end, monitor.byte_order) / monitor.scale;
       isAnomaly = Math.abs(value - monitor.expected_reading) > monitor.tolerance;
     }
-    html += `<tr class="message-row ${labeledClass} ${isAnomaly ? "anomaly" : ""}" data-index="${msg.index}">`;
+    html += `<tr class="message-row ${isAnomaly ? "anomaly" : ""}" data-index="${msg.index}">`;
     html += `<td><input type="checkbox" class="row-select" data-index="${msg.index}"></td>`;
     html += `<td>${msg.index}</td>`;
     html += `<td class="direction-${msg.direction}">${msg.direction}</td>`;
@@ -120,7 +131,11 @@ function render() {
     }
     html += `<td>${msg.ascii}</td>`;
     const eyeIcon = monitor ? ` <span class="eye-icon" title="${isAnomaly ? "Anomaly detected!" : "Being monitored"}">${isAnomaly ? "👁⚠" : "👁"}</span>` : "";
-    html += `<td class="label-cell">${label && label.name ? label.name : "+ label"}${eyeIcon}</td>`;
+    const labelHtml =
+      label && label.name
+        ? `<span class="label-dot" style="background: ${colorForLabel(label.name)}"></span><span style="color: ${colorForLabel(label.name)}">${label.name}</span>`
+        : "+ label";
+    html += `<td class="label-cell">${labelHtml}${eyeIcon}</td>`;
     html += "</tr>";
   }
   html += "</tbody></table>";
@@ -216,8 +231,11 @@ function hideNameSuggestions() {
   box.innerHTML = "";
 }
 
+let tabCycleIndex = -1;
+
 function renderNameSuggestions(query) {
   const box = document.getElementById("label-name-suggestions");
+  tabCycleIndex = -1;
   if (!query) {
     hideNameSuggestions();
     return;
@@ -246,12 +264,17 @@ document.getElementById("label-name").addEventListener("input", (e) => {
 document.getElementById("label-name").addEventListener("keydown", (e) => {
   if (e.key !== "Tab") return;
   const box = document.getElementById("label-name-suggestions");
-  const first = box.querySelector(".suggestion-item");
-  if (!box.classList.contains("hidden") && first) {
-    e.preventDefault();
-    document.getElementById("label-name").value = first.textContent;
+  const items = Array.from(box.querySelectorAll(".suggestion-item"));
+  if (box.classList.contains("hidden") || items.length === 0) return;
+  e.preventDefault();
+  if (items.length === 1) {
+    document.getElementById("label-name").value = items[0].textContent;
     hideNameSuggestions();
+    return;
   }
+  tabCycleIndex = (tabCycleIndex + 1) % items.length;
+  document.getElementById("label-name").value = items[tabCycleIndex].textContent;
+  items.forEach((item, i) => item.classList.toggle("suggestion-active", i === tabCycleIndex));
 });
 
 document.getElementById("label-name").addEventListener("blur", hideNameSuggestions);
@@ -301,12 +324,16 @@ document.getElementById("add-to-analysis").addEventListener("click", () => {
     return { index, hexBytes: msg.hex_bytes, ascii: msg.ascii, expected: "", groupKey: msg.group_key };
   });
   lastMatches = [];
+  lastRawMatches = [];
+  lastDebugHtml = "";
   spanSelection = { start: null, end: null };
   analysisContext = null;
   document.getElementById("span-start").value = "";
   document.getElementById("span-end").value = "";
   document.getElementById("value-min").value = "";
   document.getElementById("value-max").value = "";
+  document.getElementById("analysis-results").innerHTML = "";
+  resetMatchFilters();
   document.getElementById("analysis-panel").classList.remove("hidden");
   renderAnalysisPanel();
 });
@@ -314,10 +341,23 @@ document.getElementById("add-to-analysis").addEventListener("click", () => {
 document.getElementById("clear-analysis").addEventListener("click", () => {
   analysisSet = [];
   lastMatches = [];
+  lastRawMatches = [];
+  lastDebugHtml = "";
   spanSelection = { start: null, end: null };
   analysisContext = null;
+  resetMatchFilters();
   document.getElementById("analysis-panel").classList.add("hidden");
 });
+
+function resetMatchFilters() {
+  document.getElementById("filter-order").value = "";
+  document.getElementById("filter-precision").value = "";
+  document.getElementById("filter-scale").value = "";
+}
+
+document.getElementById("filter-order").addEventListener("change", renderMatchResults);
+document.getElementById("filter-precision").addEventListener("change", renderMatchResults);
+document.getElementById("filter-scale").addEventListener("input", renderMatchResults);
 
 function highlightClass(offset) {
   return lastMatches.some((m) => offset >= m.start && offset <= m.end) ? "match-highlight" : "";
@@ -505,14 +545,36 @@ async function runSearch() {
     body: JSON.stringify(requestBody),
   });
   const { matches } = await res.json();
-  lastMatches = matches;
+  lastRawMatches = matches;
 
   const rangeNote = min_value !== null && max_value !== null ? `, device range [${min_value}, ${max_value}] (adds one derived precision-based scale per span)` : "";
   const byteOrderNote = byte_order ? `, assuming <strong>${byte_order}-endian</strong> (a "${searchDirection}" field has already been deciphered with this order)` : "";
-  const debugHtml = `<p class="hint">Searched indices [${requestBody.indices}] with expected values [${requestBody.expected_values}], tolerance ${requestBody.tolerance}, scales ${requestBody.scales ? `[${requestBody.scales}]` : "(common defaults)"}, span ${requestBody.span ? `[${requestBody.span}]` : "(whole message — none set)"}${rangeNote}${byteOrderNote}.</p>`;
+  lastDebugHtml = `<p class="hint">Searched indices [${requestBody.indices}] with expected values [${requestBody.expected_values}], tolerance ${requestBody.tolerance}, scales ${requestBody.scales ? `[${requestBody.scales}]` : "(common defaults)"}, span ${requestBody.span ? `[${requestBody.span}]` : "(whole message — none set)"}${rangeNote}${byteOrderNote}.</p>`;
+  lastExpectedValues = expectedValues;
+
+  renderMatchResults();
+}
+
+function applyMatchFilters(matches) {
+  const orderFilter = document.getElementById("filter-order").value;
+  const precisionFilter = document.getElementById("filter-precision").value;
+  const scaleFilter = document.getElementById("filter-scale").value.trim();
+  return matches.filter((m) => {
+    if (orderFilter && m.byte_order !== orderFilter) return false;
+    if (precisionFilter === "none" && m.precision) return false;
+    if (precisionFilter && precisionFilter !== "none" && String(m.precision) !== precisionFilter) return false;
+    if (scaleFilter && !Number.isNaN(Number(scaleFilter)) && Math.abs(m.scale - Number(scaleFilter)) > 1e-6) return false;
+    return true;
+  });
+}
+
+function renderMatchResults() {
+  const matches = applyMatchFilters(lastRawMatches);
+  lastMatches = matches;
+  const filteredNote = matches.length !== lastRawMatches.length ? ` (${lastRawMatches.length} before filters)` : "";
 
   const resultHtml = matches.length
-    ? `<h3>Matches (${matches.length})</h3>${groupMatchesBySpan(matches)
+    ? `<h3>Matches (${matches.length}${filteredNote})</h3>${groupMatchesBySpan(matches)
         .map((group) => {
           const entriesHtml = group.entries
             .map((m) => {
@@ -523,14 +585,14 @@ async function runSearch() {
                 : "";
               const decoded = m.decoded_values.map((v) => v.toFixed(3)).join(", ");
               const precisionNote = m.precision ? ` <span class="precision-note">(precision ${m.precision})</span>` : "";
-              return `<li>${m.byte_order}-endian, scale ${formatScale(m.scale)}${precisionNote}${saveBtn}<br><span class="hint">decoded back: [${decoded}] — compare against your expected values [${requestBody.expected_values}]</span></li>`;
+              return `<li>${m.byte_order}-endian, scale ${formatScale(m.scale)}${precisionNote}${saveBtn}<br><span class="hint">decoded back: [${decoded}] — compare against your expected values [${lastExpectedValues}]</span></li>`;
             })
             .join("");
           return `<div class="match-group"><h4>bytes [${group.start}-${group.end}] (width ${group.end - group.start + 1})</h4><ul>${entriesHtml}</ul></div>`;
         })
         .join("")}`
-    : "<p class=\"hint error-text\">No match found for the given expected values/tolerance/scales.</p>";
-  document.getElementById("analysis-results").innerHTML = debugHtml + resultHtml;
+    : "<p class=\"hint error-text\">No match found for the given expected values/tolerance/scales/filters.</p>";
+  document.getElementById("analysis-results").innerHTML = lastDebugHtml + resultHtml;
   renderAnalysisPanel();
 
   document.querySelectorAll(".save-deciphered-btn").forEach((btn) => {
