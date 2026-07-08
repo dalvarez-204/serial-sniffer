@@ -87,6 +87,8 @@ td.direction-OUT { color: #ffb37c; }
 
 .hidden { display: none; }
 
+#capture-config-saved { color: #4caf50; font-size: 0.85rem; align-self: center; }
+
 .collapsible-heading { cursor: pointer; user-select: none; color: #ccc; }
 .collapsible-heading:hover { color: #fff; }
 #capture-settings-body.hidden { display: none; }

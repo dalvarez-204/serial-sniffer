@@ -126,7 +126,11 @@ def extract_data_bytes(messages: list[bytes], data_range: tuple[int, int]) -> li
     start, end = data_range
     return [m[start:end + 1] for m in messages]
 
-COMMON_SCALES = [1, 10, 100, 1000, 0.1, 0.01, 0.001]
+COMMON_SCALES = [
+    1, 10, 100, 1000, 0.1, 0.01, 0.001,
+    255, 1023, 4095, 65535,
+    1 / 255, 1 / 1023, 1 / 4095, 1 / 65535,
+]
 
 # NOTE: O(spans * orders * scales * messages) — re-decodes every span from scratch.
 # Same overlapping-subproblem shape as find_checksum_range's prefix trick; fix with

@@ -564,6 +564,10 @@ document.getElementById("save-capture-config").addEventListener("click", async (
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ interface: interfaceValue, device_address: deviceValue }),
   });
+  const savedMsg = document.getElementById("capture-config-saved");
+  savedMsg.classList.remove("hidden");
+  clearTimeout(savedMsg._hideTimeout);
+  savedMsg._hideTimeout = setTimeout(() => savedMsg.classList.add("hidden"), 2000);
 });
 
 document.getElementById("scan-lsusb").addEventListener("click", async () => {
