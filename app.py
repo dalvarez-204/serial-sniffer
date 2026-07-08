@@ -1,5 +1,6 @@
 from flask import Flask, jsonify, request, render_template
 import json
+import logging
 import os
 import subprocess
 import threading
@@ -7,6 +8,17 @@ import threading
 from first import load_capture_log, analyze_byte_variability, find_checksum_range, find_scaled_value, stream_usb_capture
 
 app = Flask(__name__)
+
+
+class SuppressGetRequestsFilter(logging.Filter):
+    """Keeps POST/DELETE requests visible in the terminal, but drops the
+    constant GET spam from message/status polling."""
+
+    def filter(self, record):
+        return "GET" not in record.getMessage()
+
+
+logging.getLogger("werkzeug").addFilter(SuppressGetRequestsFilter())
 
 CAPTURE_FILE = "capture_log.jsonl"
 LABELS_FILE = "labels.json"
@@ -255,6 +267,10 @@ def api_find_value():
     tolerance = payload.get("tolerance", 0)
     scales = payload.get("scales")
     span = tuple(payload["span"]) if payload.get("span") else None
+    min_value = payload.get("min_value")
+    if min_value is None:
+        min_value = 0
+    max_value = payload.get("max_value")
 
     if not os.path.exists(CAPTURE_FILE):
         return jsonify({"matches": []})
@@ -262,7 +278,7 @@ def api_find_value():
     records = list(load_capture_log(CAPTURE_FILE))
     messages = [records[i][2] for i in indices]
 
-    matches = find_scaled_value(messages, expected_values, tolerance, scales, span)
+    matches = find_scaled_value(messages, expected_values, tolerance, scales, span, min_value, max_value)
     return jsonify({"matches": matches})
 
 

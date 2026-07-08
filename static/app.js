@@ -179,6 +179,7 @@ function openLabelPanel(index) {
   document.getElementById("label-notes").value = label.note || "";
   hideNameSuggestions();
   document.getElementById("label-panel").classList.remove("hidden");
+  document.getElementById("label-name").focus();
 }
 
 function getKnownLabelNames() {
@@ -283,6 +284,8 @@ document.getElementById("add-to-analysis").addEventListener("click", () => {
   analysisContext = null;
   document.getElementById("span-start").value = "";
   document.getElementById("span-end").value = "";
+  document.getElementById("value-min").value = "";
+  document.getElementById("value-max").value = "";
   document.getElementById("analysis-panel").classList.remove("hidden");
   renderAnalysisPanel();
 });
@@ -397,6 +400,19 @@ document.getElementById("probe-btn").addEventListener("click", () => {
   renderAnalysisPanel();
 });
 
+function evalScaleExpression(expr) {
+  const trimmed = expr.trim();
+  if (!/^[0-9+\-*/().\s]+$/.test(trimmed)) return NaN;
+  try {
+    // Function(), not eval() directly — but the real guard is the character
+    // whitelist above: only digits/operators/parens can appear, so there's
+    // no way to reach anything but arithmetic regardless of which we use.
+    return Function(`"use strict"; return (${trimmed});`)();
+  } catch {
+    return NaN;
+  }
+}
+
 async function runSearch() {
   const expectedValues = analysisSet.map((m) => parseFloat(m.expected));
   if (expectedValues.some((v) => Number.isNaN(v))) {
@@ -406,14 +422,22 @@ async function runSearch() {
   }
   const tolerance = Number(document.getElementById("tolerance").value) || 0;
   const scalesRaw = document.getElementById("scales").value.trim();
-  const scales = scalesRaw ? scalesRaw.split(",").map((s) => Number(s.trim())) : null;
+  const scales = scalesRaw
+    ? scalesRaw.split(",").map((s) => evalScaleExpression(s)).filter((v) => !Number.isNaN(v))
+    : null;
   const span = readSpan();
+  const minRaw = document.getElementById("value-min").value.trim();
+  const maxRaw = document.getElementById("value-max").value.trim();
+  const min_value = minRaw === "" ? null : Number(minRaw);
+  const max_value = maxRaw === "" ? null : Number(maxRaw);
   const requestBody = {
     indices: analysisSet.map((m) => m.index),
     expected_values: expectedValues,
     tolerance,
     scales,
     span,
+    min_value,
+    max_value,
   };
 
   const res = await fetch("/api/find_value", {
@@ -424,7 +448,8 @@ async function runSearch() {
   const { matches } = await res.json();
   lastMatches = matches;
 
-  const debugHtml = `<p class="hint">Searched indices [${requestBody.indices}] with expected values [${requestBody.expected_values}], tolerance ${requestBody.tolerance}, scales ${requestBody.scales ? `[${requestBody.scales}]` : "(common defaults)"}, span ${requestBody.span ? `[${requestBody.span}]` : "(whole message — none set)"}.</p>`;
+  const rangeNote = min_value !== null && max_value !== null ? `, range [${min_value}, ${max_value}] (adds one derived scale per span)` : "";
+  const debugHtml = `<p class="hint">Searched indices [${requestBody.indices}] with expected values [${requestBody.expected_values}], tolerance ${requestBody.tolerance}, scales ${requestBody.scales ? `[${requestBody.scales}]` : "(common defaults)"}, span ${requestBody.span ? `[${requestBody.span}]` : "(whole message — none set)"}${rangeNote}.</p>`;
 
   const resultHtml = matches.length
     ? `<h3>Matches</h3><ul>${matches

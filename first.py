@@ -126,23 +126,26 @@ def extract_data_bytes(messages: list[bytes], data_range: tuple[int, int]) -> li
     start, end = data_range
     return [m[start:end + 1] for m in messages]
 
-COMMON_SCALES = [
-    1, 10, 100, 1000, 0.1, 0.01, 0.001,
-    255, 1023, 4095, 65535,
-    1 / 255, 1 / 1023, 1 / 4095, 1 / 65535,
-]
+COMMON_SCALES = [1, 10, 100, 1000, 0.1, 0.01, 0.001]
+COMMON_PRECISIONS = [255, 1023, 4095, 65535]  # 8/10/12/16-bit full-scale counts
 
 # NOTE: O(spans * orders * scales * messages) — re-decodes every span from scratch.
 # Same overlapping-subproblem shape as find_checksum_range's prefix trick; fix with
 # a similar prefix-based approach later instead of re-slicing per (start, end).
 def find_scaled_value(
-        messages: list[bytes], 
-        expected_values: list[float], 
-        tolerance: int = 0, scales: list[float] | None = None, 
-        span: tuple[int,int] | None = None
+        messages: list[bytes],
+        expected_values: list[float],
+        tolerance: int = 0, scales: list[float] | None = None,
+        span: tuple[int,int] | None = None,
+        min_value: float = 0,
+        max_value: float | None = None,
         ) -> list[dict]:
     length = len(messages[0])
-    scales = scales if scales is not None else COMMON_SCALES
+    scales = list(scales) if scales is not None else list(COMMON_SCALES)
+    if max_value is not None and max_value != min_value:
+        # a precision (resolution/full-scale count) is only a usable scale once
+        # we know the physical range it's spread across: scale = precision / range
+        scales += [p / (max_value - min_value) for p in COMMON_PRECISIONS]
     spans = [span] if span is not None else [(s,e) for s in range(length) for e in range(s,length)]
     distinct_expected = len(set(expected_values))
 
@@ -155,7 +158,7 @@ def find_scaled_value(
                 if len(set(targets)) < distinct_expected:
                     continue
                 if all(
-                    abs(raws[i] - targets[i]) <= tolerance
+                    abs(raws[i] - targets[i]) <= tolerance * scale
                     for i in range(len(messages))
                 ):
                     matches.append({
