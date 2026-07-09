@@ -376,14 +376,23 @@ document.getElementById("clear-analysis").addEventListener("click", () => {
   document.getElementById("analysis-panel").classList.add("hidden");
 });
 
-let focusedByteOffset = null; // right-click on a highlighted byte narrows matches to just this offset
+// Right-click on a highlighted byte toggles its span into this set for
+// side-by-side comparison — it never removes other spans from the blue
+// highlighting, it just adds a green one alongside them.
+let focusedSpans = new Set(); // keys of "start-end"
+let hoveredSpan = null; // { start, end } while hovering a match-group's summary
+
+function spanKey(start, end) {
+  return `${start}-${end}`;
+}
 
 function resetMatchFilters() {
   document.getElementById("filter-order").value = "";
   document.getElementById("filter-precision").value = "";
   document.getElementById("filter-scale").value = "";
   document.getElementById("match-filters").classList.add("hidden");
-  focusedByteOffset = null;
+  focusedSpans.clear();
+  hoveredSpan = null;
 }
 
 document.getElementById("filter-order").addEventListener("change", renderMatchResults);
@@ -391,8 +400,13 @@ document.getElementById("filter-precision").addEventListener("change", renderMat
 document.getElementById("filter-scale").addEventListener("input", renderMatchResults);
 
 function highlightClass(offset) {
-  if (!lastMatches.some((m) => offset >= m.start && offset <= m.end)) return "";
-  return focusedByteOffset !== null ? "match-highlight-focus" : "match-highlight";
+  const covering = lastMatches.filter((m) => offset >= m.start && offset <= m.end);
+  if (covering.length === 0) return "";
+  return covering.some((m) => focusedSpans.has(spanKey(m.start, m.end))) ? "match-highlight-focus" : "match-highlight";
+}
+
+function hoverClass(offset) {
+  return hoveredSpan && offset >= hoveredSpan.start && offset <= hoveredSpan.end ? "match-hover" : "";
 }
 
 function spanSelectClass(offset) {
@@ -418,8 +432,8 @@ function renderAnalysisPanel() {
       if (byte === undefined) { html += "<td></td>"; continue; }
       const predicted = byteClass(msg.groupKey, i, state.analysis);
       const highlighted = highlightClass(i);
-      const cls = `${predicted} ${highlighted} ${spanSelectClass(i)}`.trim();
-      const titleAttr = highlighted ? ' title="Right-click to filter to this byte"' : "";
+      const cls = `${predicted} ${highlighted} ${hoverClass(i)} ${spanSelectClass(i)}`.trim();
+      const titleAttr = highlighted ? ' title="Right-click to compare this span"' : "";
       html += `<td class="byte analysis-byte ${cls}" data-offset="${i}"${titleAttr}>${byte}</td>`;
     }
     if (showAscii) html += `<td>${msg.ascii}</td>`;
@@ -453,9 +467,12 @@ function renderAnalysisPanel() {
 
     cell.addEventListener("contextmenu", (e) => {
       const offset = Number(cell.dataset.offset);
-      if (!lastMatches.some((m) => offset >= m.start && offset <= m.end)) return;
+      const covering = lastMatches.find((m) => offset >= m.start && offset <= m.end);
+      if (!covering) return;
       e.preventDefault();
-      focusedByteOffset = focusedByteOffset === offset ? null : offset;
+      const key = spanKey(covering.start, covering.end);
+      if (focusedSpans.has(key)) focusedSpans.delete(key);
+      else focusedSpans.add(key);
       renderMatchResults();
     });
   });
@@ -492,7 +509,8 @@ document.getElementById("probe-btn").addEventListener("click", () => {
       '<p class="hint">Set both span start and end to probe a range.</p>';
     return;
   }
-  focusedByteOffset = null;
+  focusedSpans.clear();
+  hoveredSpan = null;
   const [start, end] = span;
   let html = "<h3>Probe result (decode only, no matching)</h3><ul>";
   for (const msg of analysisSet) {
@@ -603,7 +621,8 @@ async function runSearch() {
       '<p class="hint">Fill in an expected value for every selected message before searching.</p>';
     return;
   }
-  focusedByteOffset = null;
+  focusedSpans.clear();
+  hoveredSpan = null;
   const tolerance = Number(document.getElementById("tolerance").value) || 0;
   const scalesRaw = document.getElementById("scales").value.trim();
   const scales = scalesRaw
@@ -653,18 +672,24 @@ function applyMatchFilters(matches) {
     if (precisionFilter === "none" && m.precision) return false;
     if (precisionFilter && precisionFilter !== "none" && String(m.precision) !== precisionFilter) return false;
     if (scaleFilter && !Number.isNaN(Number(scaleFilter)) && Math.abs(m.scale - Number(scaleFilter)) > 1e-6) return false;
-    if (focusedByteOffset !== null && !(focusedByteOffset >= m.start && focusedByteOffset <= m.end)) return false;
     return true;
   });
 }
 
 function renderMatchResults() {
   const matches = applyMatchFilters(lastRawMatches);
-  lastMatches = matches;
-  const filteredNote = matches.length !== lastRawMatches.length ? ` (${lastRawMatches.length} before filters)` : "";
+  lastMatches = matches; // drives blue highlighting for every passing match — unaffected by the green comparison selection
 
-  const resultHtml = matches.length
-    ? `<h3>Matches (${matches.length}${filteredNote})</h3>${groupMatchesBySpan(matches)
+  // Right-clicking a span adds it to the comparison set without hiding any
+  // other span's blue highlighting; only the results LIST below narrows to
+  // the selected spans, so you can keep adding more to compare side by side.
+  const displayMatches = focusedSpans.size > 0
+    ? matches.filter((m) => focusedSpans.has(spanKey(m.start, m.end)))
+    : matches;
+  const filteredNote = displayMatches.length !== lastRawMatches.length ? ` (${lastRawMatches.length} before filters)` : "";
+
+  const resultHtml = displayMatches.length
+    ? `<h3>Matches (${displayMatches.length}${filteredNote})</h3>${groupMatchesBySpan(displayMatches)
         .map((group) => {
           const entriesHtml = group.entries
             .map((m) => {
@@ -678,7 +703,7 @@ function renderMatchResults() {
               return `<li>${m.byte_order}-endian, scale ${formatScale(m.scale)}${precisionNote}${saveBtn}<br><span class="hint">decoded back: [${decoded}] — compare against your expected values [${lastExpectedValues}]</span></li>`;
             })
             .join("");
-          return `<div class="match-group"><h4>bytes [${group.start}-${group.end}] (width ${group.end - group.start + 1})</h4><ul>${entriesHtml}</ul></div>`;
+          return `<div class="match-group" data-start="${group.start}" data-end="${group.end}"><h4>bytes [${group.start}-${group.end}] (width ${group.end - group.start + 1})</h4><ul>${entriesHtml}</ul></div>`;
         })
         .join("")}`
     : "<p class=\"hint error-text\">No match found for the given expected values/tolerance/scales/filters.</p>";
@@ -689,16 +714,27 @@ function renderMatchResults() {
     : "";
 
   const focusHtml =
-    focusedByteOffset !== null
-      ? `<p class="hint">🟢 Filtering to matches covering byte ${focusedByteOffset} — <button id="clear-byte-focus" class="link-action-btn">clear</button></p>`
+    focusedSpans.size > 0
+      ? `<p class="hint">🟢 Comparing ${focusedSpans.size} selected span${focusedSpans.size === 1 ? "" : "s"} — right-click another highlighted byte to add it, or <button id="clear-byte-focus" class="link-action-btn">clear</button></p>`
       : "";
 
   document.getElementById("analysis-results").innerHTML = lastDebugHtml + focusHtml + repeatHtml + resultHtml;
   renderAnalysisPanel();
 
   document.getElementById("clear-byte-focus")?.addEventListener("click", () => {
-    focusedByteOffset = null;
+    focusedSpans.clear();
     renderMatchResults();
+  });
+
+  document.querySelectorAll(".match-group").forEach((el) => {
+    el.addEventListener("mouseenter", () => {
+      hoveredSpan = { start: Number(el.dataset.start), end: Number(el.dataset.end) };
+      renderAnalysisPanel();
+    });
+    el.addEventListener("mouseleave", () => {
+      hoveredSpan = null;
+      renderAnalysisPanel();
+    });
   });
 
   document.querySelectorAll(".save-deciphered-btn").forEach((btn) => {
