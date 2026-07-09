@@ -11,6 +11,7 @@ capture_log.jsonl rather than overwriting it.
 """
 
 import json
+import math
 import time
 
 START = 0x7E
@@ -19,6 +20,14 @@ CMD_GEN = 0x03
 ADC_PACKET_TYPE = 0x01
 
 CAPTURE_FILE = "capture_log.jsonl"
+
+
+def jitter(raw: int, i: int, spread: int = 3) -> int:
+    """A real 12-bit ADC never returns the same count 16 times in a row —
+    this stands in for that sample-to-sample noise so the payload isn't just
+    two bytes repeated, which is what a truly constant reading degenerates to."""
+    ripple = round(spread * math.sin(i * 0.9 + raw))
+    return max(0, min(4095, raw + ripple))
 
 
 def xor_checksum(data: bytes) -> int:
@@ -67,20 +76,26 @@ def main():
         records.append({"timestamp": t, "direction": "OUT", "data_hex": frame.hex()})
         t += 0.05
 
-    # IN: ADC packets sweeping a "reading" so this side has real variation too.
-    # Ground truth: samples start at overall frame offset 5, little-endian 16-bit,
-    # scale = 4095/3.3 ~= 1240.9 to go from volts to raw, or divide raw by 4095 then
-    # multiply by 3.3 to go the other way. All 16 samples in a packet are set to the
-    # same value here for simplicity — a real ADC would show sample-to-sample noise,
-    # so expect find_scaled_value to report several overlapping offset matches (5-6,
-    # 7-8, 9-10, ...) rather than a single one, since they're all identical by construction.
+    # IN: the real sketch's send_ADC_packet() always emits TWO packets back to
+    # back per sampling interval — one per channel (ADC_PIN_1, ADC_PIN_2) — so
+    # we mirror that here instead of only ever sending channel 0.
+    # Ground truth (channel 0): samples start at overall frame offset 5,
+    # little-endian 16-bit, scale = 4095/3.3 ~= 1240.9 to go from volts to raw,
+    # or divide raw by 4095 then multiply by 3.3 to go the other way.
+    # Channel 1 (ADC_PIN_2) isn't driven by anything in this test rig, so it
+    # mimics a floating pin: a low noisy baseline instead of a clean sweep.
     voltages = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
     for voltage in voltages:
-        raw = to_4095(voltage)
-        samples = [raw] * 16
-        frame = build_adc_packet(channel=0, samples=samples)
-        records.append({"timestamp": t, "direction": "IN", "data_hex": frame.hex()})
-        t += 0.05
+        raw_ch0 = to_4095(voltage)
+        samples_ch0 = [jitter(raw_ch0, i) for i in range(16)]
+        frame_ch0 = build_adc_packet(channel=0, samples=samples_ch0)
+        records.append({"timestamp": t, "direction": "IN", "data_hex": frame_ch0.hex()})
+        t += 0.01
+
+        samples_ch1 = [jitter(80, i, spread=15) for i in range(16)]
+        frame_ch1 = build_adc_packet(channel=1, samples=samples_ch1)
+        records.append({"timestamp": t, "direction": "IN", "data_hex": frame_ch1.hex()})
+        t += 0.04
 
     with open(CAPTURE_FILE, "a") as f:
         for record in records:
@@ -88,6 +103,7 @@ def main():
 
     print(f"Appended {len(records)} synthetic records to {CAPTURE_FILE}")
     print(f"OUT ground truth: amplitude sweep {amplitudes} (volts), byte offset 6, scale 255/3.3")
+    print("IN ground truth: two packets per step (channel byte at offset 4: 0 then 1)")
     print(f"IN ground truth: voltage sweep {voltages} (volts), byte offset 5+ (little-endian), scale 4095/3.3")
 
 

@@ -323,6 +323,21 @@ document.getElementById("label-remove").addEventListener("click", async () => {
   render();
 });
 
+function deriveSharedLabelContext(indices) {
+  let context = null;
+  for (const index of indices) {
+    const label = state.labels[index];
+    const msg = state.messages.find((m) => m.index === index);
+    if (!label || !label.name || !msg) return null;
+    if (!context) {
+      context = { label: label.name, direction: msg.direction };
+    } else if (context.label !== label.name || context.direction !== msg.direction) {
+      return null;
+    }
+  }
+  return context;
+}
+
 document.getElementById("add-to-analysis").addEventListener("click", () => {
   const checked = Array.from(document.querySelectorAll(".row-select:checked")).map(
     (cb) => Number(cb.dataset.index)
@@ -338,7 +353,7 @@ document.getElementById("add-to-analysis").addEventListener("click", () => {
   lastRawMatches = [];
   lastDebugHtml = "";
   spanSelection = { start: null, end: null };
-  analysisContext = null;
+  analysisContext = deriveSharedLabelContext(checked);
   document.getElementById("span-start").value = "";
   document.getElementById("span-end").value = "";
   document.getElementById("value-min").value = "";
@@ -364,6 +379,7 @@ function resetMatchFilters() {
   document.getElementById("filter-order").value = "";
   document.getElementById("filter-precision").value = "";
   document.getElementById("filter-scale").value = "";
+  document.getElementById("match-filters").classList.add("hidden");
 }
 
 document.getElementById("filter-order").addEventListener("change", renderMatchResults);
@@ -388,7 +404,7 @@ function renderAnalysisPanel() {
   const maxLen = Math.max(0, ...analysisSet.map((m) => m.hexBytes.length));
   let html = "<table><thead><tr><th>#</th>";
   for (let i = 0; i < maxLen; i++) html += `<th>${i}</th>`;
-  html += "<th>ascii</th><th>expected value</th></tr></thead><tbody>";
+  html += `${showAscii ? "<th>ascii</th>" : ""}<th>expected value</th></tr></thead><tbody>`;
 
   analysisSet.forEach((msg, row) => {
     html += `<tr><td>${msg.index}</td>`;
@@ -399,7 +415,7 @@ function renderAnalysisPanel() {
       const cls = `${predicted} ${highlightClass(i)} ${spanSelectClass(i)}`.trim();
       html += `<td class="byte analysis-byte ${cls}" data-offset="${i}">${byte}</td>`;
     }
-    html += `<td>${msg.ascii}</td>`;
+    if (showAscii) html += `<td>${msg.ascii}</td>`;
     html += `<td><input type="text" class="expected-input" data-row="${row}" value="${msg.expected}" placeholder="e.g. 5.0"></td>`;
     html += "</tr>";
   });
@@ -472,6 +488,7 @@ document.getElementById("probe-btn").addEventListener("click", () => {
   html += "</ul>";
   lastMatches = [{ start, end }];
   document.getElementById("analysis-results").innerHTML = html;
+  document.getElementById("match-filters").classList.remove("hidden");
   renderAnalysisPanel();
 });
 
@@ -502,6 +519,49 @@ function groupMatchesBySpan(matches) {
   return Array.from(groups.values()).sort(
     (a, b) => a.start - b.start || (a.end - a.start) - (b.end - b.start)
   );
+}
+
+// A message that packs several samples (e.g. one ADC reading repeated N times)
+// shows up here as many matching spans of the same width, evenly spaced by a
+// constant stride — that repeating pattern is the tell, not a single field.
+function longestConstantStrideRun(sortedSpans) {
+  if (sortedSpans.length < 3) return null;
+  const gaps = [];
+  for (let i = 1; i < sortedSpans.length; i++) gaps.push(sortedSpans[i].start - sortedSpans[i - 1].start);
+
+  let best = null;
+  let runStart = 0;
+  for (let i = 1; i <= gaps.length; i++) {
+    if (i === gaps.length || gaps[i] !== gaps[runStart]) {
+      const spanCount = i - runStart + 1;
+      if (spanCount >= 3 && (!best || spanCount > best.spanCount)) {
+        best = { stride: gaps[runStart], spanCount, spans: sortedSpans.slice(runStart, runStart + spanCount) };
+      }
+      runStart = i;
+    }
+  }
+  return best;
+}
+
+function detectRepeatingArray(matches) {
+  const seen = new Set();
+  const byWidth = new Map();
+  for (const m of matches) {
+    const key = `${m.start}-${m.end}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const width = m.end - m.start + 1;
+    if (!byWidth.has(width)) byWidth.set(width, []);
+    byWidth.get(width).push({ start: m.start, end: m.end });
+  }
+
+  let best = null;
+  for (const [width, group] of byWidth) {
+    group.sort((a, b) => a.start - b.start);
+    const run = longestConstantStrideRun(group);
+    if (run && (!best || run.spanCount > best.spanCount)) best = { ...run, width };
+  }
+  return best;
 }
 
 function getSearchDirection() {
@@ -557,6 +617,7 @@ async function runSearch() {
   });
   const { matches } = await res.json();
   lastRawMatches = matches;
+  document.getElementById("match-filters").classList.remove("hidden");
 
   const rangeNote = min_value !== null && max_value !== null ? `, device range [${min_value}, ${max_value}] (adds one derived precision-based scale per span)` : "";
   const byteOrderNote = byte_order ? `, assuming <strong>${byte_order}-endian</strong> (a "${searchDirection}" field has already been deciphered with this order)` : "";
@@ -603,7 +664,13 @@ function renderMatchResults() {
         })
         .join("")}`
     : "<p class=\"hint error-text\">No match found for the given expected values/tolerance/scales/filters.</p>";
-  document.getElementById("analysis-results").innerHTML = lastDebugHtml + resultHtml;
+
+  const repeatRun = detectRepeatingArray(matches);
+  const repeatHtml = repeatRun
+    ? `<p class="hint repeat-note">🔁 Looks like a repeated array: ${repeatRun.spanCount} samples of ${repeatRun.width} byte${repeatRun.width === 1 ? "" : "s"} each, stride ${repeatRun.stride} — offsets [${repeatRun.spans.map((s) => s.start).join(", ")}]. This message may pack multiple readings rather than one field.</p>`
+    : "";
+
+  document.getElementById("analysis-results").innerHTML = lastDebugHtml + repeatHtml + resultHtml;
   renderAnalysisPanel();
 
   document.querySelectorAll(".save-deciphered-btn").forEach((btn) => {
@@ -683,10 +750,14 @@ function renderMonitorsPanel() {
         : `<span class="monitor-ok">✓ OK (${readings.length} reading${readings.length === 1 ? "" : "s"} checked against their own labeled value)</span>`;
 
     const precisionNote = monitor.precision ? ` <span class="precision-note">(precision ${monitor.precision})</span>` : "";
+    const deciphered = state.deciphered[key];
+    const decipherHtml = deciphered
+      ? ` <span class="deciphered-note">deciphered: bytes [${deciphered.start}-${deciphered.end}], ${deciphered.byte_order}-endian, scale ${deciphered.scale}</span>`
+      : ` <button class="mark-deciphered-from-monitor-btn" data-key="${key}">Mark deciphered</button>`;
     html += `<li>
       <strong>${monitor.label}</strong> (${monitor.direction}), bytes [${monitor.start}-${monitor.end}], ${monitor.byte_order}-endian, scale ${formatScale(monitor.scale)}${precisionNote} —
       tolerance ± ${monitor.tolerance}: ${statusHtml}
-      <button class="stop-watch-btn" data-label="${monitor.label}" data-direction="${monitor.direction}">Stop watching</button>
+      <button class="stop-watch-btn" data-label="${monitor.label}" data-direction="${monitor.direction}">Stop watching</button>${decipherHtml}
     </li>`;
   }
   html += "</ul>";
@@ -698,6 +769,25 @@ function renderMonitorsPanel() {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ label: btn.dataset.label, direction: btn.dataset.direction }),
+      });
+      await loadData();
+    });
+  });
+
+  document.querySelectorAll(".mark-deciphered-from-monitor-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const monitor = state.monitors[btn.dataset.key];
+      await fetch("/api/deciphered", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          label: monitor.label,
+          direction: monitor.direction,
+          start: monitor.start,
+          end: monitor.end,
+          byte_order: monitor.byte_order,
+          scale: monitor.scale,
+        }),
       });
       await loadData();
     });
