@@ -209,10 +209,11 @@ document.getElementById("clear-selection").addEventListener("click", () => {
 });
 
 document.addEventListener("click", (e) => {
-  const panel = document.getElementById("label-panel");
-  if (!panel.classList.contains("hidden") && !panel.contains(e.target)) {
-    panel.classList.add("hidden");
-  }
+  document.querySelectorAll(".modal-panel").forEach((panel) => {
+    if (!panel.classList.contains("hidden") && !panel.contains(e.target)) {
+      panel.classList.add("hidden");
+    }
+  });
 });
 
 function openLabelPanel(index) {
@@ -375,11 +376,14 @@ document.getElementById("clear-analysis").addEventListener("click", () => {
   document.getElementById("analysis-panel").classList.add("hidden");
 });
 
+let focusedByteOffset = null; // right-click on a highlighted byte narrows matches to just this offset
+
 function resetMatchFilters() {
   document.getElementById("filter-order").value = "";
   document.getElementById("filter-precision").value = "";
   document.getElementById("filter-scale").value = "";
   document.getElementById("match-filters").classList.add("hidden");
+  focusedByteOffset = null;
 }
 
 document.getElementById("filter-order").addEventListener("change", renderMatchResults);
@@ -387,7 +391,8 @@ document.getElementById("filter-precision").addEventListener("change", renderMat
 document.getElementById("filter-scale").addEventListener("input", renderMatchResults);
 
 function highlightClass(offset) {
-  return lastMatches.some((m) => offset >= m.start && offset <= m.end) ? "match-highlight" : "";
+  if (!lastMatches.some((m) => offset >= m.start && offset <= m.end)) return "";
+  return focusedByteOffset !== null ? "match-highlight-focus" : "match-highlight";
 }
 
 function spanSelectClass(offset) {
@@ -412,8 +417,10 @@ function renderAnalysisPanel() {
       const byte = msg.hexBytes[i];
       if (byte === undefined) { html += "<td></td>"; continue; }
       const predicted = byteClass(msg.groupKey, i, state.analysis);
-      const cls = `${predicted} ${highlightClass(i)} ${spanSelectClass(i)}`.trim();
-      html += `<td class="byte analysis-byte ${cls}" data-offset="${i}">${byte}</td>`;
+      const highlighted = highlightClass(i);
+      const cls = `${predicted} ${highlighted} ${spanSelectClass(i)}`.trim();
+      const titleAttr = highlighted ? ' title="Right-click to filter to this byte"' : "";
+      html += `<td class="byte analysis-byte ${cls}" data-offset="${i}"${titleAttr}>${byte}</td>`;
     }
     if (showAscii) html += `<td>${msg.ascii}</td>`;
     html += `<td><input type="text" class="expected-input" data-row="${row}" value="${msg.expected}" placeholder="e.g. 5.0"></td>`;
@@ -442,6 +449,14 @@ function renderAnalysisPanel() {
       document.getElementById("span-start").value = spanSelection.start;
       document.getElementById("span-end").value = spanSelection.end !== null ? spanSelection.end : "";
       renderAnalysisPanel();
+    });
+
+    cell.addEventListener("contextmenu", (e) => {
+      const offset = Number(cell.dataset.offset);
+      if (!lastMatches.some((m) => offset >= m.start && offset <= m.end)) return;
+      e.preventDefault();
+      focusedByteOffset = focusedByteOffset === offset ? null : offset;
+      renderMatchResults();
     });
   });
 }
@@ -477,6 +492,7 @@ document.getElementById("probe-btn").addEventListener("click", () => {
       '<p class="hint">Set both span start and end to probe a range.</p>';
     return;
   }
+  focusedByteOffset = null;
   const [start, end] = span;
   let html = "<h3>Probe result (decode only, no matching)</h3><ul>";
   for (const msg of analysisSet) {
@@ -587,6 +603,7 @@ async function runSearch() {
       '<p class="hint">Fill in an expected value for every selected message before searching.</p>';
     return;
   }
+  focusedByteOffset = null;
   const tolerance = Number(document.getElementById("tolerance").value) || 0;
   const scalesRaw = document.getElementById("scales").value.trim();
   const scales = scalesRaw
@@ -636,6 +653,7 @@ function applyMatchFilters(matches) {
     if (precisionFilter === "none" && m.precision) return false;
     if (precisionFilter && precisionFilter !== "none" && String(m.precision) !== precisionFilter) return false;
     if (scaleFilter && !Number.isNaN(Number(scaleFilter)) && Math.abs(m.scale - Number(scaleFilter)) > 1e-6) return false;
+    if (focusedByteOffset !== null && !(focusedByteOffset >= m.start && focusedByteOffset <= m.end)) return false;
     return true;
   });
 }
@@ -652,8 +670,8 @@ function renderMatchResults() {
             .map((m) => {
               const avgDecoded = m.decoded_values.reduce((a, b) => a + b, 0) / m.decoded_values.length;
               const saveBtn = analysisContext
-                ? ` <button class="save-deciphered-btn" data-start="${m.start}" data-end="${m.end}" data-order="${m.byte_order}" data-scale="${m.scale}">Mark deciphered for "${analysisContext.label}" (${analysisContext.direction})</button>
-                    <button class="watch-btn" data-start="${m.start}" data-end="${m.end}" data-order="${m.byte_order}" data-scale="${m.scale}" data-precision="${m.precision ?? ""}" data-avg-decoded="${avgDecoded}">👁 Watch</button>`
+                ? ` <button class="save-deciphered-btn link-action-btn" data-start="${m.start}" data-end="${m.end}" data-order="${m.byte_order}" data-scale="${m.scale}">+ mark deciphered for "${analysisContext.label}" (${analysisContext.direction})</button>
+                    <button class="watch-btn link-action-btn" data-start="${m.start}" data-end="${m.end}" data-order="${m.byte_order}" data-scale="${m.scale}" data-precision="${m.precision ?? ""}" data-avg-decoded="${avgDecoded}">👁 watch</button>`
                 : "";
               const decoded = m.decoded_values.map((v) => v.toFixed(3)).join(", ");
               const precisionNote = m.precision ? ` <span class="precision-note">(precision ${m.precision})</span>` : "";
@@ -670,8 +688,18 @@ function renderMatchResults() {
     ? `<p class="hint repeat-note">🔁 Looks like a repeated array: ${repeatRun.spanCount} samples of ${repeatRun.width} byte${repeatRun.width === 1 ? "" : "s"} each, stride ${repeatRun.stride} — offsets [${repeatRun.spans.map((s) => s.start).join(", ")}]. This message may pack multiple readings rather than one field.</p>`
     : "";
 
-  document.getElementById("analysis-results").innerHTML = lastDebugHtml + repeatHtml + resultHtml;
+  const focusHtml =
+    focusedByteOffset !== null
+      ? `<p class="hint">🟢 Filtering to matches covering byte ${focusedByteOffset} — <button id="clear-byte-focus" class="link-action-btn">clear</button></p>`
+      : "";
+
+  document.getElementById("analysis-results").innerHTML = lastDebugHtml + focusHtml + repeatHtml + resultHtml;
   renderAnalysisPanel();
+
+  document.getElementById("clear-byte-focus")?.addEventListener("click", () => {
+    focusedByteOffset = null;
+    renderMatchResults();
+  });
 
   document.querySelectorAll(".save-deciphered-btn").forEach((btn) => {
     btn.addEventListener("click", async () => {
@@ -692,31 +720,42 @@ function renderMatchResults() {
   });
 
   document.querySelectorAll(".watch-btn").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const searchTolerance = document.getElementById("tolerance").value || "0.1";
-      const toleranceInput = prompt(
-        "Allowed deviation before flagging as an anomaly (compared against each message's own labeled Value, not a fixed baseline):",
-        searchTolerance
-      );
-      if (toleranceInput === null) return;
-      await fetch("/api/monitors", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          label: analysisContext.label,
-          direction: analysisContext.direction,
-          start: Number(btn.dataset.start),
-          end: Number(btn.dataset.end),
-          byte_order: btn.dataset.order,
-          scale: Number(btn.dataset.scale),
-          precision: btn.dataset.precision ? Number(btn.dataset.precision) : null,
-          tolerance: Number(toleranceInput) || 0,
-        }),
-      });
-      await loadData();
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      pendingWatch = {
+        label: analysisContext.label,
+        direction: analysisContext.direction,
+        start: Number(btn.dataset.start),
+        end: Number(btn.dataset.end),
+        byte_order: btn.dataset.order,
+        scale: Number(btn.dataset.scale),
+        precision: btn.dataset.precision ? Number(btn.dataset.precision) : null,
+      };
+      document.getElementById("watch-tolerance").value = document.getElementById("tolerance").value || "0.1";
+      document.getElementById("watch-panel").classList.remove("hidden");
     });
   });
 }
+
+let pendingWatch = null;
+
+document.getElementById("watch-save").addEventListener("click", async () => {
+  if (!pendingWatch) return;
+  const tolerance = Number(document.getElementById("watch-tolerance").value) || 0;
+  await fetch("/api/monitors", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...pendingWatch, tolerance }),
+  });
+  pendingWatch = null;
+  document.getElementById("watch-panel").classList.add("hidden");
+  await loadData();
+});
+
+document.getElementById("watch-cancel").addEventListener("click", () => {
+  pendingWatch = null;
+  document.getElementById("watch-panel").classList.add("hidden");
+});
 
 document.getElementById("search-btn").addEventListener("click", runSearch);
 
@@ -753,7 +792,7 @@ function renderMonitorsPanel() {
     const deciphered = state.deciphered[key];
     const decipherHtml = deciphered
       ? ` <span class="deciphered-note">deciphered: bytes [${deciphered.start}-${deciphered.end}], ${deciphered.byte_order}-endian, scale ${deciphered.scale}</span>`
-      : ` <button class="mark-deciphered-from-monitor-btn" data-key="${key}">Mark deciphered</button>`;
+      : ` <button class="mark-deciphered-from-monitor-btn link-action-btn" data-key="${key}">+ mark deciphered</button>`;
     html += `<li>
       <strong>${monitor.label}</strong> (${monitor.direction}), bytes [${monitor.start}-${monitor.end}], ${monitor.byte_order}-endian, scale ${formatScale(monitor.scale)}${precisionNote} —
       tolerance ± ${monitor.tolerance}: ${statusHtml}

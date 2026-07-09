@@ -1,3 +1,4 @@
+from dotenv import load_dotenv
 from flask import Flask, jsonify, request, render_template
 import json
 import logging
@@ -7,6 +8,8 @@ import threading
 
 from first import load_capture_log, analyze_byte_variability, find_checksum_range, find_scaled_value, stream_usb_capture
 from codegen import build_codegen_context, generate_driver_code
+
+load_dotenv()
 
 app = Flask(__name__)
 

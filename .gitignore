@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+capture_log.jsonl
+labels.json
+deciphered.json
+monitors.json
+capture_config.json

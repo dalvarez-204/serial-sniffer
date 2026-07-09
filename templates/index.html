@@ -90,7 +90,7 @@
     <div id="analysis-results"></div>
   </div>
 
-  <div id="label-panel" class="hidden">
+  <div id="label-panel" class="modal-panel hidden">
     <h2>Label message <span id="label-index"></span></h2>
     <label>Name
       <input id="label-name" type="text" placeholder="e.g. set_voltage" autocomplete="off">
@@ -105,6 +105,15 @@
     <button id="label-save">Save label</button>
     <button id="label-remove">Remove label</button>
     <button id="label-close">Close</button>
+  </div>
+
+  <div id="watch-panel" class="modal-panel hidden">
+    <h2>Watch this match</h2>
+    <label>Tolerance <span class="info-icon" title="Allowed deviation before flagging as an anomaly, compared against each message's own labeled Value, not a fixed baseline.">ⓘ</span>
+      <input id="watch-tolerance" type="text" placeholder="e.g. 0.1">
+    </label>
+    <button id="watch-save">Start watching</button>
+    <button id="watch-cancel">Cancel</button>
   </div>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>

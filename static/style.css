@@ -43,7 +43,7 @@ td.byte.data { background: #17401a; }
 td.direction-IN { color: #7cc4ff; }
 td.direction-OUT { color: #ffb37c; }
 
-#label-panel {
+.modal-panel {
   position: fixed;
   top: 10%;
   left: 50%;
@@ -53,9 +53,10 @@ td.direction-OUT { color: #ffb37c; }
   padding: 1.5rem;
   border-radius: 8px;
   width: 320px;
+  z-index: 20;
 }
-#label-panel.hidden { display: none; }
-#label-panel label { position: relative; display: block; }
+.modal-panel.hidden { display: none; }
+.modal-panel label { position: relative; display: block; }
 
 .suggestions {
   position: absolute;
@@ -75,7 +76,7 @@ td.direction-OUT { color: #ffb37c; }
 .suggestion-item:hover { background: #383838; }
 .suggestion-item.suggestion-active { background: #4a2f70; outline: 1px solid #b98aff; }
 
-#label-panel input, #label-panel textarea {
+.modal-panel input, .modal-panel textarea {
   width: 100%;
   margin: 0.3rem 0 1rem 0;
   background: #111;
@@ -84,7 +85,7 @@ td.direction-OUT { color: #ffb37c; }
   padding: 0.4rem;
   box-sizing: border-box;
 }
-#label-panel button { margin-right: 0.5rem; }
+.modal-panel button { margin-right: 0.5rem; }
 
 .hidden { display: none; }
 
@@ -119,6 +120,18 @@ td.direction-OUT { color: #ffb37c; }
 
 td.label-cell { cursor: pointer; color: #888; }
 td.label-cell:hover { color: #eee; text-decoration: underline dotted; }
+
+.link-action-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  margin-left: 0.5rem;
+  color: #888;
+  cursor: pointer;
+  font: inherit;
+  text-decoration: none;
+}
+.link-action-btn:hover { color: #eee; text-decoration: underline dotted; }
 
 #analysis-panel {
   margin-top: 1.5rem;
@@ -177,6 +190,7 @@ td.byte.match-highlight { background: #1a3a5c; outline: 1px solid #4a9eff; }
 #analysis-messages td.byte.checksum { background: #3a2c14; }
 #analysis-messages td.byte.data { background: #16241a; }
 #analysis-messages td.byte.match-highlight { background: #1a3a5c; }
+#analysis-messages td.byte.match-highlight-focus { background: #1a5c2e; outline: 1px solid #4caf50; }
 td.byte.deciphered { box-shadow: 0 0 8px 2px rgba(255, 215, 0, 0.85) inset; outline: 1px solid gold; }
 td.byte.deciphered.data { background: #2a2308; }
 
