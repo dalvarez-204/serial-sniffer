@@ -33,6 +33,7 @@ th { color: #888; font-weight: normal; }
 tr.message-row { cursor: pointer; transition: opacity 0.15s; }
 tr.message-row:hover { background: #222; }
 tr.message-row.dimmed { opacity: 0.3; }
+tr.message-row.selected { outline: 2px solid #4a9eff; outline-offset: -1px; }
 
 td.byte { min-width: 1.6em; }
 td.byte.constant { background: #444; }
@@ -96,6 +97,8 @@ td.direction-OUT { color: #ffb37c; }
 .toolbar { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; align-items: flex-end; }
 .toolbar label { display: flex; flex-direction: column; font-size: 0.8rem; color: #aaa; }
 .toolbar label input { background: #111; color: #eee; border: 1px solid #444; padding: 0.3rem; margin-top: 0.2rem; }
+.toolbar label.checkbox-label { flex-direction: row; align-items: center; gap: 0.3rem; }
+.toolbar label.checkbox-label input { width: auto; margin: 0; padding: 0; }
 
 #lsusb-output {
   background: #111;

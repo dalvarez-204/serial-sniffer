@@ -21,11 +21,15 @@ function colorForLabel(name) {
   return `hsl(${hue}, 65%, 60%)`;
 }
 
+let showFullTimestamp = false; // default: time only
+let showAscii = true;
+
 function formatTimestamp(epochSeconds) {
   const d = new Date(epochSeconds * 1000);
   const pad = (n, len = 2) => String(n).padStart(len, "0");
-  const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const time = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+  if (!showFullTimestamp) return time;
+  const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   return `${date} ${time}`;
 }
 
@@ -106,7 +110,7 @@ function render() {
   const maxLen = Math.max(0, ...state.messages.map((m) => m.length));
   let html = "<table><thead><tr><th></th><th>#</th><th>dir</th><th>t</th>";
   for (let i = 0; i < maxLen; i++) html += `<th>${i}</th>`;
-  html += "<th>ascii</th><th>label</th></tr></thead><tbody>";
+  html += `${showAscii ? "<th>ascii</th>" : ""}<th>label</th></tr></thead><tbody>`;
 
   for (const msg of state.messages) {
     const label = state.labels[msg.index];
@@ -133,7 +137,7 @@ function render() {
       if (monitor && i >= monitor.start && i <= monitor.end) cls += " monitored-byte";
       html += `<td class="byte ${cls}">${byte}</td>`;
     }
-    html += `<td>${msg.ascii}</td>`;
+    if (showAscii) html += `<td>${msg.ascii}</td>`;
     const eyeIcon = monitor ? ` <span class="eye-icon" title="${isAnomaly ? "Anomaly detected!" : "Being monitored"}">${isAnomaly ? "👁⚠" : "👁"}</span>` : "";
     const labelHtml =
       label && label.name
@@ -193,6 +197,7 @@ function updateSelectionUI() {
   document.querySelectorAll(".message-row").forEach((row) => {
     const checked = row.querySelector(".row-select").checked;
     row.classList.toggle("dimmed", anyChecked && !checked);
+    row.classList.toggle("selected", checked);
   });
   document.getElementById("clear-selection").classList.toggle("hidden", !anyChecked);
 }
@@ -325,7 +330,9 @@ document.getElementById("add-to-analysis").addEventListener("click", () => {
   if (checked.length === 0) return;
   analysisSet = checked.map((index) => {
     const msg = state.messages.find((m) => m.index === index);
-    return { index, hexBytes: msg.hex_bytes, ascii: msg.ascii, expected: "", groupKey: msg.group_key };
+    const label = state.labels[index];
+    const expected = label && !Number.isNaN(parseFloat(label.value)) ? String(label.value) : "";
+    return { index, hexBytes: msg.hex_bytes, ascii: msg.ascii, expected, groupKey: msg.group_key };
   });
   lastMatches = [];
   lastRawMatches = [];
@@ -783,6 +790,16 @@ function setPolling(enabled) {
 
 document.getElementById("toggle-polling").addEventListener("click", () => {
   setPolling(!pollingEnabled);
+});
+
+document.getElementById("toggle-full-timestamp").addEventListener("change", (e) => {
+  showFullTimestamp = e.target.checked;
+  render();
+});
+
+document.getElementById("toggle-ascii").addEventListener("change", (e) => {
+  showAscii = e.target.checked;
+  render();
 });
 
 async function loadCaptureConfig() {
