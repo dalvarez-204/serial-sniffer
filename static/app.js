@@ -623,7 +623,7 @@ async function runSearch() {
   }
   focusedSpans.clear();
   hoveredSpan = null;
-  const tolerance = Number(document.getElementById("tolerance").value) || 0;
+  const tolerance = Number(document.getElementById("tolerance").value) || 0.15;
   const scalesRaw = document.getElementById("scales").value.trim();
   const scales = scalesRaw
     ? scalesRaw.split(",").map((s) => evalScaleExpression(s)).filter((v) => !Number.isNaN(v))
@@ -689,23 +689,26 @@ function renderMatchResults() {
   const filteredNote = displayMatches.length !== lastRawMatches.length ? ` (${lastRawMatches.length} before filters)` : "";
 
   const resultHtml = displayMatches.length
-    ? `<h3>Matches (${displayMatches.length}${filteredNote})</h3>${groupMatchesBySpan(displayMatches)
+    ? `<h3>Matches (${displayMatches.length}${filteredNote})</h3><div class="match-groups-grid">${groupMatchesBySpan(displayMatches)
         .map((group) => {
           const entriesHtml = group.entries
             .map((m) => {
               const avgDecoded = m.decoded_values.reduce((a, b) => a + b, 0) / m.decoded_values.length;
               const saveBtn = analysisContext
-                ? ` <button class="save-deciphered-btn link-action-btn" data-start="${m.start}" data-end="${m.end}" data-order="${m.byte_order}" data-scale="${m.scale}">+ mark deciphered for "${analysisContext.label}" (${analysisContext.direction})</button>
+                ? ` <button class="save-deciphered-btn link-action-btn" data-start="${m.start}" data-end="${m.end}" data-order="${m.byte_order}" data-scale="${m.scale}" title='Mark deciphered for "${analysisContext.label}" (${analysisContext.direction})'>+ mark deciphered</button>
                     <button class="watch-btn link-action-btn" data-start="${m.start}" data-end="${m.end}" data-order="${m.byte_order}" data-scale="${m.scale}" data-precision="${m.precision ?? ""}" data-avg-decoded="${avgDecoded}">👁 watch</button>`
                 : "";
               const decoded = m.decoded_values.map((v) => v.toFixed(3)).join(", ");
               const precisionNote = m.precision ? ` <span class="precision-note">(precision ${m.precision})</span>` : "";
-              return `<li>${m.byte_order}-endian, scale ${formatScale(m.scale)}${precisionNote}${saveBtn}<br><span class="hint">decoded back: [${decoded}] — compare against your expected values [${lastExpectedValues}]</span></li>`;
+              return `<li>
+                <div class="match-primary">decoded: [${decoded}] <span class="hint">vs expected [${lastExpectedValues}]</span></div>
+                <div class="match-secondary hint">${m.byte_order}-endian · scale ${formatScale(m.scale)}${precisionNote}${saveBtn}</div>
+              </li>`;
             })
             .join("");
           return `<div class="match-group" data-start="${group.start}" data-end="${group.end}"><h4>bytes [${group.start}-${group.end}] (width ${group.end - group.start + 1})</h4><ul>${entriesHtml}</ul></div>`;
         })
-        .join("")}`
+        .join("")}</div>`
     : "<p class=\"hint error-text\">No match found for the given expected values/tolerance/scales/filters.</p>";
 
   const repeatRun = detectRepeatingArray(matches);
@@ -767,7 +770,7 @@ function renderMatchResults() {
         scale: Number(btn.dataset.scale),
         precision: btn.dataset.precision ? Number(btn.dataset.precision) : null,
       };
-      document.getElementById("watch-tolerance").value = document.getElementById("tolerance").value || "0.1";
+      document.getElementById("watch-tolerance").value = document.getElementById("tolerance").value || "0.15";
       document.getElementById("watch-panel").classList.remove("hidden");
     });
   });
@@ -777,7 +780,7 @@ let pendingWatch = null;
 
 document.getElementById("watch-save").addEventListener("click", async () => {
   if (!pendingWatch) return;
-  const tolerance = Number(document.getElementById("watch-tolerance").value) || 0;
+  const tolerance = Number(document.getElementById("watch-tolerance").value) || 0.15;
   await fetch("/api/monitors", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

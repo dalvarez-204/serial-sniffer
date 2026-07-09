@@ -9,6 +9,7 @@
   <h1>Serial Sniffer</h1>
   <p class="hint">
     Click a message to label it. Colors:
+    <span class="info-icon" title="Framing (constant): this byte offset never changes across every captured message in its group. Checksum candidate: found by testing every possible starting offset with XOR and sum-mod-256 against the assumed checksum byte (second-to-last) until one reproduces it for every message. Data: everything else that actually varies.">ⓘ</span>
     <span class="legend constant">framing (constant)</span>
     <span class="legend checksum">checksum candidate</span>
     <span class="legend data">data</span>
@@ -55,13 +56,13 @@
   </div>
 
   <div id="analysis-panel" class="hidden">
-    <h2>Analysis</h2>
+    <h2>Analysis <span class="info-icon" title="For every possible byte span, in both byte orders, it decodes that span as an integer across all your messages, then checks whether multiplying your expected values by a candidate scale (the built-ins, or ones you type into Scales) reproduces those raw bytes — within Tolerance, which is expressed in your real units and automatically converted to raw counts per candidate scale. If you set Min/Max value, it also derives one extra scale per common precision constant (255/1023/4095/65535) from Max minus Min — useful when the device's resolution is a known bit-depth spread over a known physical range.">ⓘ</span></h2>
     <div id="analysis-messages"></div>
     <div class="analysis-controls">
       <label>Start <span class="info-icon" title="Restricts the search to sub-spans within this region, instead of the whole message. Leave blank along with End to search everywhere.">ⓘ</span> <input id="span-start" type="number" min="0" placeholder="optional"></label>
       <label>End <span class="info-icon" title="The other edge of the region to search within. Every possible sub-span inside [Start, End] gets tried, not just the exact range.">ⓘ</span> <input id="span-end" type="number" min="0" placeholder="optional"></label>
       <button id="clear-span" type="button">Clear span</button>
-      <label>Tolerance <span class="info-icon" title="Expressed in the same units as your expected values (e.g. volts), not raw bytes — it's automatically scaled per candidate scale being tested.">ⓘ</span> <input id="tolerance" type="number" min="0" value="0"></label>
+      <label>Tolerance <span class="info-icon" title="Expressed in the same units as your expected values (e.g. volts), not raw bytes — it's automatically scaled per candidate scale being tested. Defaults to 0.15.">ⓘ</span> <input id="tolerance" type="number" min="0" step="0.01" value="0.15"></label>
       <label>Scales <span class="info-icon" title="Comma-separated, arithmetic expressions allowed (e.g. 255/3.3). Leave blank to try the common built-in scales.">ⓘ</span> <input id="scales" type="text" placeholder="e.g. 1, 100, 255/3.3"></label>
       <label>Min value <span class="info-icon" title="The minimum value the device can represent (its physical full-scale range, not just your current sample). Optional, defaults to 0.">ⓘ</span> <input id="value-min" type="text" placeholder="e.g. 0"></label>
       <label>Max value <span class="info-icon" title="The maximum value the device can represent. Combined with Min value, this lets precision constants (255/1023/4095/65535) become usable scales.">ⓘ</span> <input id="value-max" type="text" placeholder="e.g. 3.3"></label>
@@ -110,7 +111,7 @@
   <div id="watch-panel" class="modal-panel hidden">
     <h2>Watch this match</h2>
     <label>Tolerance <span class="info-icon" title="Allowed deviation before flagging as an anomaly, compared against each message's own labeled Value, not a fixed baseline.">ⓘ</span>
-      <input id="watch-tolerance" type="text" placeholder="e.g. 0.1">
+      <input id="watch-tolerance" type="text" placeholder="e.g. 0.15">
     </label>
     <button id="watch-save">Start watching</button>
     <button id="watch-cancel">Cancel</button>

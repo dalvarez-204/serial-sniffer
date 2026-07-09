@@ -276,13 +276,22 @@ td.byte.span-start-marker { box-shadow: inset 3px 0 0 0 #b98aff; }
 td.byte.span-end-marker { box-shadow: inset -3px 0 0 0 #b98aff; }
 td.byte.span-start-marker.span-end-marker { box-shadow: inset 3px 0 0 0 #b98aff, inset -3px 0 0 0 #b98aff; }
 
-#analysis-results ul { margin: 0.5rem 0 0 1.2rem; padding: 0; }
+.match-groups-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
 
 .match-group {
   border: 1px solid #333;
   border-radius: 6px;
   padding: 0.5rem 0.75rem;
-  margin-bottom: 0.5rem;
   background: #171717;
 }
-.match-group h4 { margin: 0 0 0.3rem 0; color: #ccc; }
+.match-group h4 { margin: 0 0 0.3rem 0; color: #ccc; font-size: 0.85rem; }
+.match-group ul { list-style: none; margin: 0; padding: 0; }
+.match-group li { padding: 0.25rem 0; border-top: 1px solid #262626; }
+.match-group li:first-child { border-top: none; padding-top: 0; }
+.match-primary { font-size: 0.85rem; }
+.match-secondary { font-size: 0.7rem; margin-top: 0.15rem; }
