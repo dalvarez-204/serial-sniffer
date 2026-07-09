@@ -6,6 +6,7 @@ import subprocess
 import threading
 
 from first import load_capture_log, analyze_byte_variability, find_checksum_range, find_scaled_value, stream_usb_capture
+from codegen import build_codegen_context, generate_driver_code
 
 app = Flask(__name__)
 
@@ -358,6 +359,25 @@ def api_delete_monitor():
     monitors.pop(key, None)
     save_monitors(monitors)
     return jsonify({"ok": True})
+
+
+@app.route("/api/generate_driver", methods=["POST"])
+def api_generate_driver():
+    payload = request.get_json()
+    label = payload["label"]
+    direction = payload["direction"]
+
+    if not os.path.exists(CAPTURE_FILE):
+        return jsonify({"error": "no capture data yet"}), 400
+
+    records = list(load_capture_log(CAPTURE_FILE))
+    _, analysis = build_capture_view(CAPTURE_FILE)
+    context = build_codegen_context(label, direction, load_deciphered(), records, analysis)
+    if context is None:
+        return jsonify({"error": f'no "{direction}" messages found'}), 400
+
+    code, is_mock = generate_driver_code(context)
+    return jsonify({"code": code, "mock": is_mock})
 
 
 if __name__ == "__main__":

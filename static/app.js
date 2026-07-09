@@ -826,6 +826,7 @@ function renderLabelGroups() {
     html += `<li>
       <strong>${group.name}</strong> (${group.direction}, ${group.members.length} labeled, ${withValues.length} with a value, ${distinctValues} distinct)${decipheredNote}
       <button class="analyze-group-btn" data-key="${key}" ${distinctValues < 2 ? "disabled" : ""}>Analyze</button>
+      <button class="generate-driver-btn" data-label="${group.name}" data-direction="${group.direction}" ${deciphered ? "" : "disabled"} title="${deciphered ? "" : "Mark deciphered first"}">Generate driver function</button>
     </li>`;
   }
   html += "</ul>";
@@ -834,7 +835,43 @@ function renderLabelGroups() {
   document.querySelectorAll(".analyze-group-btn").forEach((btn) => {
     btn.addEventListener("click", () => analyzeLabelGroup(groups[btn.dataset.key]));
   });
+
+  document.querySelectorAll(".generate-driver-btn").forEach((btn) => {
+    btn.addEventListener("click", () => generateDriver(btn.dataset.label, btn.dataset.direction));
+  });
 }
+
+async function generateDriver(label, direction) {
+  const panel = document.getElementById("driver-panel");
+  const codeEl = document.getElementById("driver-code");
+  const noteEl = document.getElementById("driver-mock-note");
+  panel.classList.remove("hidden");
+  codeEl.textContent = "Generating…";
+  noteEl.textContent = "";
+
+  const res = await fetch("/api/generate_driver", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label, direction }),
+  });
+  const result = await res.json();
+  if (result.error) {
+    codeEl.textContent = `Error: ${result.error}`;
+    return;
+  }
+  codeEl.textContent = result.code;
+  noteEl.textContent = result.mock
+    ? "(mock output — export ANTHROPIC_API_KEY on the server and retry for a real generated function)"
+    : "";
+}
+
+document.getElementById("driver-close").addEventListener("click", () => {
+  document.getElementById("driver-panel").classList.add("hidden");
+});
+
+document.getElementById("driver-copy").addEventListener("click", async () => {
+  await navigator.clipboard.writeText(document.getElementById("driver-code").textContent);
+});
 
 function analyzeLabelGroup(group) {
   const withValues = group.members.filter((m) => m.value !== null);

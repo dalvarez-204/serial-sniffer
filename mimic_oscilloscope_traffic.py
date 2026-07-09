@@ -76,26 +76,19 @@ def main():
         records.append({"timestamp": t, "direction": "OUT", "data_hex": frame.hex()})
         t += 0.05
 
-    # IN: the real sketch's send_ADC_packet() always emits TWO packets back to
-    # back per sampling interval — one per channel (ADC_PIN_1, ADC_PIN_2) — so
-    # we mirror that here instead of only ever sending channel 0.
-    # Ground truth (channel 0): samples start at overall frame offset 5,
-    # little-endian 16-bit, scale = 4095/3.3 ~= 1240.9 to go from volts to raw,
-    # or divide raw by 4095 then multiply by 3.3 to go the other way.
-    # Channel 1 (ADC_PIN_2) isn't driven by anything in this test rig, so it
-    # mimics a floating pin: a low noisy baseline instead of a clean sweep.
+    # IN: channel 0 only — the real sketch also sends channel 1 (ADC_PIN_2)
+    # back to back, but that doubles the message count for no benefit when
+    # you're just eyeballing/parsing captures by hand, so it's left out here.
+    # Ground truth: samples start at overall frame offset 5, little-endian
+    # 16-bit, scale = 4095/3.3 ~= 1240.9 to go from volts to raw, or divide
+    # raw by 4095 then multiply by 3.3 to go the other way.
     voltages = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
     for voltage in voltages:
-        raw_ch0 = to_4095(voltage)
-        samples_ch0 = [jitter(raw_ch0, i) for i in range(16)]
-        frame_ch0 = build_adc_packet(channel=0, samples=samples_ch0)
-        records.append({"timestamp": t, "direction": "IN", "data_hex": frame_ch0.hex()})
-        t += 0.01
-
-        samples_ch1 = [jitter(80, i, spread=15) for i in range(16)]
-        frame_ch1 = build_adc_packet(channel=1, samples=samples_ch1)
-        records.append({"timestamp": t, "direction": "IN", "data_hex": frame_ch1.hex()})
-        t += 0.04
+        raw = to_4095(voltage)
+        samples = [jitter(raw, i) for i in range(16)]
+        frame = build_adc_packet(channel=0, samples=samples)
+        records.append({"timestamp": t, "direction": "IN", "data_hex": frame.hex()})
+        t += 0.05
 
     with open(CAPTURE_FILE, "a") as f:
         for record in records:
@@ -103,8 +96,7 @@ def main():
 
     print(f"Appended {len(records)} synthetic records to {CAPTURE_FILE}")
     print(f"OUT ground truth: amplitude sweep {amplitudes} (volts), byte offset 6, scale 255/3.3")
-    print("IN ground truth: two packets per step (channel byte at offset 4: 0 then 1)")
-    print(f"IN ground truth: voltage sweep {voltages} (volts), byte offset 5+ (little-endian), scale 4095/3.3")
+    print(f"IN ground truth: channel 0 only, voltage sweep {voltages} (volts), byte offset 5+ (little-endian), scale 4095/3.3")
 
 
 if __name__ == "__main__":
