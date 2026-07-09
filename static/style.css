@@ -115,13 +115,6 @@ td.direction-OUT { color: #ffb37c; }
 .toolbar button.danger:hover { background: #3a1a1a; }
 
 td.label-cell { cursor: pointer; color: #888; }
-.label-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  margin-right: 0.35rem;
-}
 td.label-cell:hover { color: #eee; text-decoration: underline dotted; }
 
 #analysis-panel {

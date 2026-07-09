@@ -85,6 +85,9 @@ function decodeHexSpan(hexBytes, start, end, order) {
 function getActiveMonitorForMessage(msg) {
   const label = state.labels[msg.index];
   if (!label || !label.name) return null;
+  // the watch only "activates" for this message once it has its own value —
+  // there's no fixed baseline, each message is checked against its own entry
+  if (Number.isNaN(parseFloat(label.value))) return null;
   return state.monitors[decipheredKey(label.name, msg.direction)] || null;
 }
 
@@ -110,8 +113,9 @@ function render() {
     const monitor = getActiveMonitorForMessage(msg);
     let isAnomaly = false;
     if (monitor) {
-      const value = decodeHexSpan(msg.hex_bytes, monitor.start, monitor.end, monitor.byte_order) / monitor.scale;
-      isAnomaly = Math.abs(value - monitor.expected_reading) > monitor.tolerance;
+      const decoded = decodeHexSpan(msg.hex_bytes, monitor.start, monitor.end, monitor.byte_order) / monitor.scale;
+      const expected = parseFloat(label.value);
+      isAnomaly = Math.abs(decoded - expected) > monitor.tolerance;
     }
     html += `<tr class="message-row ${isAnomaly ? "anomaly" : ""}" data-index="${msg.index}">`;
     html += `<td><input type="checkbox" class="row-select" data-index="${msg.index}"></td>`;
@@ -133,7 +137,7 @@ function render() {
     const eyeIcon = monitor ? ` <span class="eye-icon" title="${isAnomaly ? "Anomaly detected!" : "Being monitored"}">${isAnomaly ? "👁⚠" : "👁"}</span>` : "";
     const labelHtml =
       label && label.name
-        ? `<span class="label-dot" style="background: ${colorForLabel(label.name)}"></span><span style="color: ${colorForLabel(label.name)}">${label.name}</span>`
+        ? `<span style="color: ${colorForLabel(label.name)}">● ${label.name}</span>`
         : "+ label";
     html += `<td class="label-cell">${labelHtml}${eyeIcon}</td>`;
     html += "</tr>";
@@ -581,7 +585,7 @@ function renderMatchResults() {
               const avgDecoded = m.decoded_values.reduce((a, b) => a + b, 0) / m.decoded_values.length;
               const saveBtn = analysisContext
                 ? ` <button class="save-deciphered-btn" data-start="${m.start}" data-end="${m.end}" data-order="${m.byte_order}" data-scale="${m.scale}">Mark deciphered for "${analysisContext.label}" (${analysisContext.direction})</button>
-                    <button class="watch-btn" data-start="${m.start}" data-end="${m.end}" data-order="${m.byte_order}" data-scale="${m.scale}" data-avg-decoded="${avgDecoded}">👁 Watch</button>`
+                    <button class="watch-btn" data-start="${m.start}" data-end="${m.end}" data-order="${m.byte_order}" data-scale="${m.scale}" data-precision="${m.precision ?? ""}" data-avg-decoded="${avgDecoded}">👁 Watch</button>`
                 : "";
               const decoded = m.decoded_values.map((v) => v.toFixed(3)).join(", ");
               const precisionNote = m.precision ? ` <span class="precision-note">(precision ${m.precision})</span>` : "";
@@ -615,10 +619,11 @@ function renderMatchResults() {
 
   document.querySelectorAll(".watch-btn").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      const defaultReading = Number(btn.dataset.avgDecoded).toFixed(3);
-      const readingInput = prompt("Expected reading for this monitor (flag if a labeled message deviates from this):", defaultReading);
-      if (readingInput === null || readingInput.trim() === "") return;
-      const toleranceInput = prompt("Allowed tolerance before flagging as an anomaly:", "0.1");
+      const searchTolerance = document.getElementById("tolerance").value || "0.1";
+      const toleranceInput = prompt(
+        "Allowed deviation before flagging as an anomaly (compared against each message's own labeled Value, not a fixed baseline):",
+        searchTolerance
+      );
       if (toleranceInput === null) return;
       await fetch("/api/monitors", {
         method: "POST",
@@ -630,7 +635,7 @@ function renderMatchResults() {
           end: Number(btn.dataset.end),
           byte_order: btn.dataset.order,
           scale: Number(btn.dataset.scale),
-          expected_reading: Number(readingInput),
+          precision: btn.dataset.precision ? Number(btn.dataset.precision) : null,
           tolerance: Number(toleranceInput) || 0,
         }),
       });
@@ -653,25 +658,27 @@ function renderMonitorsPanel() {
   for (const key of keys) {
     const monitor = state.monitors[key];
     const readings = state.messages
-      .filter((msg) => {
-        const label = state.labels[msg.index];
-        return label && label.name === monitor.label && msg.direction === monitor.direction;
-      })
-      .map((msg) => ({
+      .map((msg) => ({ msg, label: state.labels[msg.index] }))
+      .filter(({ label, msg }) => label && label.name === monitor.label && msg.direction === monitor.direction)
+      .map(({ msg, label }) => ({
         index: msg.index,
-        value: decodeHexSpan(msg.hex_bytes, monitor.start, monitor.end, monitor.byte_order) / monitor.scale,
-      }));
-    const anomalies = readings.filter((r) => Math.abs(r.value - monitor.expected_reading) > monitor.tolerance);
+        expected: parseFloat(label.value),
+        decoded: decodeHexSpan(msg.hex_bytes, monitor.start, monitor.end, monitor.byte_order) / monitor.scale,
+      }))
+      .filter((r) => !Number.isNaN(r.expected)); // not active for this message until it has its own value
+
+    const anomalies = readings.filter((r) => Math.abs(r.decoded - r.expected) > monitor.tolerance);
     const statusHtml =
       readings.length === 0
-        ? '<span class="hint">no labeled messages yet</span>'
+        ? '<span class="hint">no labeled messages with a value yet</span>'
         : anomalies.length > 0
-        ? `<span class="error-text">⚠ ANOMALY — #${anomalies.map((a) => `${a.index} (${a.value.toFixed(3)})`).join(", #")}</span>`
-        : `<span class="monitor-ok">✓ OK (${readings.length} reading${readings.length === 1 ? "" : "s"} checked)</span>`;
+        ? `<span class="error-text">⚠ ANOMALY — #${anomalies.map((a) => `${a.index} (got ${a.decoded.toFixed(3)}, expected ${a.expected})`).join(", #")}</span>`
+        : `<span class="monitor-ok">✓ OK (${readings.length} reading${readings.length === 1 ? "" : "s"} checked against their own labeled value)</span>`;
 
+    const precisionNote = monitor.precision ? ` <span class="precision-note">(precision ${monitor.precision})</span>` : "";
     html += `<li>
-      <strong>${monitor.label}</strong> (${monitor.direction}), bytes [${monitor.start}-${monitor.end}], ${monitor.byte_order}-endian, scale ${formatScale(monitor.scale)} —
-      expecting ~${monitor.expected_reading} ± ${monitor.tolerance}: ${statusHtml}
+      <strong>${monitor.label}</strong> (${monitor.direction}), bytes [${monitor.start}-${monitor.end}], ${monitor.byte_order}-endian, scale ${formatScale(monitor.scale)}${precisionNote} —
+      tolerance ± ${monitor.tolerance}: ${statusHtml}
       <button class="stop-watch-btn" data-label="${monitor.label}" data-direction="${monitor.direction}">Stop watching</button>
     </li>`;
   }

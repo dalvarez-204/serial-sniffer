@@ -340,7 +340,10 @@ def api_save_monitor():
         "end": payload["end"],
         "byte_order": payload["byte_order"],
         "scale": payload["scale"],
-        "expected_reading": payload["expected_reading"],
+        "precision": payload.get("precision"),
+        # no fixed baseline here — each message is checked against its own
+        # label value, so the watch only "activates" once a message has both
+        # the matching label and a value entered
         "tolerance": payload.get("tolerance", 0),
     }
     save_monitors(monitors)
