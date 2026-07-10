@@ -39,35 +39,58 @@ def main():
             os.remove(path)
 
     psu.main()
-    psu_out_count = len(psu.VOLTAGES)
-    psu_in_count = len(psu.CURRENTS)
 
-    # PSU: fully labeled/deciphered/watched showcase.
-    labels = {}
+    # Record layout from mimic_psu_traffic.main(): one-time set_ocp, one-time
+    # set_ovp, then (set_voltage OUT, reading IN) pairs per swept voltage.
+    labels = {
+        "0": {"name": "set_ocp", "note": "one-time OCP limit", "value": psu.OCP_LIMIT},
+        "1": {"name": "set_ovp", "note": "one-time OVP limit", "value": psu.OVP_LIMIT},
+    }
+    readings = []
     for i, voltage in enumerate(psu.VOLTAGES):
-        labels[str(i)] = {"name": "set_voltage", "note": "commanded output voltage", "value": voltage}
-    for j, current in enumerate(psu.CURRENTS):
-        labels[str(psu_out_count + j)] = {"name": "read_current", "note": "measured current draw", "value": current}
+        out_index = 2 + 2 * i
+        in_index = out_index + 1
+        actual_voltage, actual_current = psu.simulate_reading(voltage, psu.OCP_LIMIT, psu.OVP_LIMIT)
+        readings.append((actual_voltage, actual_current))
+        labels[str(out_index)] = {"name": "set_voltage", "note": "commanded output voltage", "value": voltage}
+        labels[str(in_index)] = {"name": "reading", "note": "actual voltage + current under load", "value": actual_voltage}
     with open(LABELS_FILE, "w") as f:
         json.dump(labels, f, indent=2)
 
     deciphered = {
+        "set_ocp::OUT::limit": {
+            "label": "set_ocp", "direction": "OUT", "param": "limit",
+            "start": 2, "end": 3, "byte_order": "big", "scale": psu.SCALE,
+        },
+        "set_ovp::OUT::limit": {
+            "label": "set_ovp", "direction": "OUT", "param": "limit",
+            "start": 2, "end": 3, "byte_order": "big", "scale": psu.SCALE,
+        },
         "set_voltage::OUT::voltage": {
             "label": "set_voltage", "direction": "OUT", "param": "voltage",
-            "start": 2, "end": 2, "byte_order": "big", "scale": 255 / 30.0,
+            "start": 2, "end": 3, "byte_order": "big", "scale": psu.SCALE,
         },
-        "read_current::IN::current": {
-            "label": "read_current", "direction": "IN", "param": "current",
-            "start": 2, "end": 2, "byte_order": "big", "scale": 255 / 5.0,
+        "reading::IN::voltage": {
+            "label": "reading", "direction": "IN", "param": "voltage",
+            "start": 2, "end": 3, "byte_order": "big", "scale": psu.SCALE,
+        },
+        "reading::IN::current": {
+            "label": "reading", "direction": "IN", "param": "current",
+            "start": 4, "end": 5, "byte_order": "big", "scale": psu.SCALE,
         },
     }
     with open(DECIPHERED_FILE, "w") as f:
         json.dump(deciphered, f, indent=2)
 
     monitors = {
-        "read_current::IN::current": {
-            "label": "read_current", "direction": "IN", "param": "current",
-            "start": 2, "end": 2, "byte_order": "big", "scale": 255 / 5.0,
+        "reading::IN::voltage": {
+            "label": "reading", "direction": "IN", "param": "voltage",
+            "start": 2, "end": 3, "byte_order": "big", "scale": psu.SCALE,
+            "precision": None, "tolerance": 0.15,
+        },
+        "reading::IN::current": {
+            "label": "reading", "direction": "IN", "param": "current",
+            "start": 4, "end": 5, "byte_order": "big", "scale": psu.SCALE,
             "precision": None, "tolerance": 0.15,
         },
     }
@@ -75,7 +98,8 @@ def main():
         json.dump(monitors, f, indent=2)
 
     # Battery tester: appended raw, deliberately left unlabeled.
-    battery_start = psu_out_count + psu_in_count
+    psu_record_count = 2 + 2 * len(psu.VOLTAGES)
+    battery_start = psu_record_count
     battery.main()
     battery_count = 2 + 2 * len(battery.CURRENTS)  # 2 voltage-stream reports + (OUT,IN) pairs per current
     battery_end = battery_start + battery_count - 1

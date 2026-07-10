@@ -286,6 +286,20 @@ td.byte.deciphered.deciphered-boundary {
 .precision-note { color: #ffa500; }
 .repeat-note { color: #4dd0e1; }
 
+.closest-miss {
+  margin-top: 0.5rem;
+  border: 1px solid #a15c00;
+  border-radius: 6px;
+  padding: 0.4rem 0.7rem;
+  background: #171717;
+}
+.closest-miss summary {
+  cursor: pointer;
+  color: #ffa500;
+  font-size: 0.85rem;
+}
+.closest-miss-detail { margin-top: 0.5rem; font-size: 0.85rem; }
+
 .info-icon {
   display: inline-flex;
   align-items: center;

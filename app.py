@@ -319,8 +319,8 @@ def api_find_value():
     records = list(load_capture_log(CAPTURE_FILE))
     messages = [records[i][2] for i in indices]
 
-    matches = find_scaled_value(messages, expected_values, tolerance, scales, span, min_value, max_value, byte_order)
-    return jsonify({"matches": matches})
+    result = find_scaled_value(messages, expected_values, tolerance, scales, span, min_value, max_value, byte_order)
+    return jsonify(result)
 
 
 @app.route("/api/label", methods=["POST"])

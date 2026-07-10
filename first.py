@@ -140,7 +140,7 @@ def find_scaled_value(
         min_value: float = 0,
         max_value: float | None = None,
         byte_order: str | None = None,
-        ) -> list[dict]:
+        ) -> dict:
     length = len(messages[0])
     scale_candidates = [(s, None) for s in (scales if scales is not None else COMMON_SCALES)]
     if max_value is not None and max_value != min_value:
@@ -156,6 +156,8 @@ def find_scaled_value(
     distinct_expected = len(set(expected_values))
 
     matches = []
+    closest_miss = None
+    closest_deviation = None
     for start, end in spans:
         for order in orders:
             raws = [int.from_bytes(m[start:end + 1], order) for m in messages]
@@ -165,10 +167,11 @@ def find_scaled_value(
                     continue
                 if len(set(targets)) < distinct_expected:
                     continue
-                if all(
-                    abs(raws[i] - targets[i]) <= tolerance * scale
-                    for i in range(len(messages))
-                ):
+                # deviation in real units (not raw counts), so candidates at
+                # different scales are comparable on equal footing
+                deviations = [abs(raws[i] - targets[i]) / scale for i in range(len(messages))]
+                max_deviation = max(deviations)
+                if max_deviation <= tolerance:
                     matches.append({
                         "start": start,
                         "end": end,
@@ -177,7 +180,18 @@ def find_scaled_value(
                         "precision": precision,
                         "decoded_values": [raws[i] / scale for i in range(len(messages))],
                     })
-    return matches
+                if closest_deviation is None or max_deviation < closest_deviation:
+                    closest_deviation = max_deviation
+                    closest_miss = {
+                        "start": start,
+                        "end": end,
+                        "byte_order": order,
+                        "scale": scale,
+                        "precision": precision,
+                        "decoded_values": [raws[i] / scale for i in range(len(messages))],
+                        "deviation": max_deviation,
+                    }
+    return {"matches": matches, "closest_miss": None if matches else closest_miss}
 
 
 if __name__ == "__main__": 

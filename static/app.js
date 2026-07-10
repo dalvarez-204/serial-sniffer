@@ -12,6 +12,7 @@ let state = { messages: [], analysis: {}, labels: {}, deciphered: {}, monitors: 
 let analysisSet = []; // [{index, hexBytes, ascii, expected: ""}]
 let lastMatches = [];
 let lastRawMatches = [];
+let lastClosestMiss = null; // best-scoring non-match from the last search — only meaningful when lastRawMatches is empty
 let lastDebugHtml = "";
 let lastExpectedValues = [];
 let spanSelection = { start: null, end: null };
@@ -483,6 +484,7 @@ document.getElementById("add-to-analysis").addEventListener("click", () => {
   });
   lastMatches = [];
   lastRawMatches = [];
+  lastClosestMiss = null;
   lastDebugHtml = "";
   spanSelection = { start: null, end: null };
   analysisContext = deriveSharedLabelContext(checked);
@@ -500,6 +502,7 @@ document.getElementById("clear-analysis").addEventListener("click", () => {
   analysisSet = [];
   lastMatches = [];
   lastRawMatches = [];
+  lastClosestMiss = null;
   lastDebugHtml = "";
   spanSelection = { start: null, end: null };
   analysisContext = null;
@@ -642,6 +645,7 @@ document.getElementById("probe-btn").addEventListener("click", () => {
   }
   focusedSpans.clear();
   hoveredSpan = null;
+  lastClosestMiss = null;
   const [start, end] = span;
   let html = "<h3>Probe result (decode only, no matching)</h3><ul>";
   for (const msg of analysisSet) {
@@ -782,8 +786,9 @@ async function runSearch() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(requestBody),
   });
-  const { matches } = await res.json();
+  const { matches, closest_miss } = await res.json();
   lastRawMatches = matches;
+  lastClosestMiss = closest_miss;
   document.getElementById("match-filters").classList.remove("hidden");
 
   const rangeNote = min_value !== null && max_value !== null ? `, device range [${min_value}, ${max_value}] (adds one derived precision-based scale per span)` : "";
@@ -855,7 +860,24 @@ function renderMatchResults() {
       ? `<p class="hint">🟢 Comparing ${focusedSpans.size} selected span${focusedSpans.size === 1 ? "" : "s"} — right-click another highlighted byte to add it, or <button id="clear-byte-focus" class="link-action-btn">clear</button></p>`
       : "";
 
-  document.getElementById("analysis-results").innerHTML = lastDebugHtml + focusHtml + repeatHtml + resultHtml;
+  // Never a real match — deliberately kept out of the matches grid, with no
+  // Mark-deciphered/Watch actions, so it can't be mistaken for one. A close
+  // deviation hints "loosen tolerance/try another scale"; a wildly-off one
+  // hints the value isn't transmitted directly at all (may need deriving
+  // from more than one message, e.g. a delta between two readings).
+  const closestMissHtml =
+    displayMatches.length === 0 && lastClosestMiss
+      ? `<details class="closest-miss">
+           <summary>🔍 No exact match — closest attempt was off by ${lastClosestMiss.deviation.toFixed(3)} (click to see)</summary>
+           <div class="closest-miss-detail">
+             bytes [${lastClosestMiss.start}-${lastClosestMiss.end}], ${lastClosestMiss.byte_order}-endian, scale ${formatScale(lastClosestMiss.scale)}
+             <div class="hint">decoded: [${lastClosestMiss.decoded_values.map((v) => v.toFixed(3)).join(", ")}] vs expected [${lastExpectedValues}]</div>
+             <p class="hint">Close deviation? Try loosening tolerance or a different scale. Way off? The value might not be transmitted directly here — it may need deriving from more than one message.</p>
+           </div>
+         </details>`
+      : "";
+
+  document.getElementById("analysis-results").innerHTML = lastDebugHtml + focusHtml + repeatHtml + resultHtml + closestMissHtml;
   renderAnalysisPanel();
 
   document.getElementById("clear-byte-focus")?.addEventListener("click", () => {
