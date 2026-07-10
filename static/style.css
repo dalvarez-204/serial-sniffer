@@ -34,12 +34,6 @@ th { color: #888; font-weight: normal; }
 /* wide byte-grid tables scroll horizontally within their own box instead of
    dragging the whole page into a side-scroll */
 #capture-table, #analysis-messages { max-width: 100%; overflow-x: auto; }
-#capture-table {
-  max-height: 65vh;
-  overflow-y: auto;
-  border: 1px solid #333;
-  border-radius: 6px;
-}
 #scroll-sentinel { text-align: center; padding: 0.4rem; }
 
 tr.message-row { cursor: pointer; transition: opacity 0.15s; }
@@ -112,7 +106,7 @@ td.direction-OUT { color: #ffb37c; }
 
 .toolbar { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; align-items: flex-end; }
 .toolbar label { display: flex; flex-direction: column; font-size: 0.8rem; color: #aaa; }
-.toolbar label input { background: #111; color: #eee; border: 1px solid #444; padding: 0.3rem; margin-top: 0.2rem; }
+.toolbar label input, .toolbar label select { background: #111; color: #eee; border: 1px solid #444; padding: 0.3rem; margin-top: 0.2rem; }
 .toolbar label.checkbox-label { flex-direction: row; align-items: center; gap: 0.3rem; }
 .toolbar label.checkbox-label input { width: auto; margin: 0; padding: 0; }
 

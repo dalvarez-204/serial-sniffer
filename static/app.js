@@ -47,7 +47,7 @@ let showFullTimestamp = false; // default: time only
 let showAscii = true;
 
 const MESSAGE_PAGE_SIZE = 25;
-let visibleMessageCount = MESSAGE_PAGE_SIZE; // grows as older history gets revealed by scrolling up
+let visibleMessageCount = MESSAGE_PAGE_SIZE; // jumps to the full message count once, on scrolling up
 let scrollSentinelObserver = null; // disconnected and replaced each render to avoid leaking one per render
 
 function formatTimestamp(epochSeconds) {
@@ -125,8 +125,6 @@ function getActiveMonitorsForMessage(msg) {
 function render() {
   const scrollY = window.scrollY;
   const tableContainer = document.getElementById("capture-table");
-  const prevScrollTop = tableContainer.scrollTop;
-  const prevScrollHeight = tableContainer.scrollHeight;
   const previouslySelected = new Set(
     Array.from(document.querySelectorAll(".row-select:checked")).map((cb) => Number(cb.dataset.index))
   );
@@ -137,16 +135,22 @@ function render() {
     : "";
   document.getElementById("confidence-warnings").innerHTML = warningHtml;
 
+  const directionFilter = document.getElementById("direction-filter").value;
+  const filteredMessages = directionFilter
+    ? state.messages.filter((m) => m.direction === directionFilter)
+    : state.messages;
+
   // Only the most recent `visibleMessageCount` messages are ever in the DOM —
-  // matters once a live capture has piled up thousands of rows. Scrolling to
-  // the top of the pane reveals more (older) ones via the sentinel below.
-  const windowStart = Math.max(0, state.messages.length - visibleMessageCount);
-  const windowedMessages = state.messages.slice(windowStart);
+  // matters once a live capture has piled up thousands of rows. Scrolling
+  // near the top of the page reveals the rest, all at once (see the
+  // sentinel/observer below) rather than growing 25 at a time.
+  const windowStart = Math.max(0, filteredMessages.length - visibleMessageCount);
+  const windowedMessages = filteredMessages.slice(windowStart);
   const hiddenOlderCount = windowStart;
 
   const maxLen = Math.max(0, ...state.messages.map((m) => m.length));
   const sentinelHtml = hiddenOlderCount > 0
-    ? `<div id="scroll-sentinel" class="hint">▲ scroll up for ${hiddenOlderCount} earlier message${hiddenOlderCount === 1 ? "" : "s"}</div>`
+    ? `<div id="scroll-sentinel" class="hint">▲ scroll up to load ${hiddenOlderCount} earlier message${hiddenOlderCount === 1 ? "" : "s"}</div>`
     : "";
   let html = sentinelHtml + "<table><thead><tr><th></th><th>#</th><th>dir</th><th>t</th>";
   for (let i = 0; i < maxLen; i++) html += `<th>${i}</th>`;
@@ -200,37 +204,29 @@ function render() {
   renderLabelGroups();
   renderMonitorsPanel();
 
-  // Keep the pane's own scroll position stable across a re-render: if
-  // rendering just added height above the old scroll position (revealing
-  // older messages, or the very first render landing at the newest ones),
-  // shift scrollTop by the same delta so the view doesn't visually jump.
-  tableContainer.scrollTop = prevScrollTop + (tableContainer.scrollHeight - prevScrollHeight);
-
   scrollSentinelObserver?.disconnect();
   const sentinel = document.getElementById("scroll-sentinel");
   if (sentinel) {
     // IntersectionObserver reports the CURRENT state as soon as .observe()
-    // starts, not just future changes — if the pane isn't actually full
-    // enough to need scrolling, the sentinel would be trivially "visible"
-    // immediately and this would fire right away with no real scroll
-    // gesture, ballooning visibleMessageCount until all history loads. Skip
-    // that first, non-scroll-triggered callback; only act once the
-    // intersection state actually changes.
+    // starts, not just future changes — if the whole table already fits on
+    // screen with no need to scroll, the sentinel would be trivially
+    // "visible" immediately and this would fire right away with no real
+    // scroll gesture. Skip that first, non-scroll-triggered callback; only
+    // act once the intersection state actually changes. root is omitted
+    // (defaults to the browser viewport) since this now scrolls with the
+    // whole page, not a boxed-off pane.
     let isFirstCallback = true;
-    scrollSentinelObserver = new IntersectionObserver(
-      (entries) => {
-        if (isFirstCallback) {
-          isFirstCallback = false;
-          return;
-        }
-        if (entries[0].isIntersecting) {
-          scrollSentinelObserver.disconnect();
-          visibleMessageCount += MESSAGE_PAGE_SIZE;
-          render();
-        }
-      },
-      { root: tableContainer }
-    );
+    scrollSentinelObserver = new IntersectionObserver((entries) => {
+      if (isFirstCallback) {
+        isFirstCallback = false;
+        return;
+      }
+      if (entries[0].isIntersecting) {
+        scrollSentinelObserver.disconnect();
+        visibleMessageCount = state.messages.length; // reveal everything remaining in one shot, not another chunk
+        render();
+      }
+    });
     scrollSentinelObserver.observe(sentinel);
   }
 
@@ -347,8 +343,8 @@ document.getElementById("replay-copy").addEventListener("click", async () => {
 });
 
 function applySelectionClick(index, checked, shiftKey) {
-  if (checked && pollingEnabled) {
-    setPolling(false);
+  if (checked && pollingInterval) {
+    setPollingInterval(false);
   }
   if (shiftKey && lastCheckedIndex !== null) {
     const lo = Math.min(lastCheckedIndex, index);
@@ -1245,26 +1241,16 @@ document.getElementById("clear-captures").addEventListener("click", async () => 
   await loadData();
 });
 
-let pollingEnabled = false;
 let pollingInterval = null;
 
-function setPolling(enabled) {
-  pollingEnabled = enabled;
-  document.getElementById("toggle-polling").textContent = enabled
-    ? "Disable capture"
-    : "Enable capture";
-  document.getElementById("toggle-polling").classList.toggle("active", enabled);
-  if (enabled) {
+function setPollingInterval(active) {
+  if (active && !pollingInterval) {
     pollingInterval = setInterval(loadData, 150);
-  } else if (pollingInterval) {
+  } else if (!active && pollingInterval) {
     clearInterval(pollingInterval);
     pollingInterval = null;
   }
 }
-
-document.getElementById("toggle-polling").addEventListener("click", () => {
-  setPolling(!pollingEnabled);
-});
 
 document.getElementById("toggle-full-timestamp").addEventListener("change", (e) => {
   showFullTimestamp = e.target.checked;
@@ -1276,6 +1262,8 @@ document.getElementById("toggle-ascii").addEventListener("change", (e) => {
   render();
 });
 
+document.getElementById("direction-filter").addEventListener("change", render);
+
 async function loadCaptureConfig() {
   const res = await fetch("/api/capture_config");
   const config = await res.json();
@@ -1283,19 +1271,26 @@ async function loadCaptureConfig() {
   document.getElementById("capture-device").value = config.device_address;
 }
 
-document.getElementById("save-capture-config").addEventListener("click", async () => {
-  const interfaceValue = document.getElementById("capture-interface").value.trim() || "usbmon3";
-  const deviceValue = Number(document.getElementById("capture-device").value) || 2;
-  await fetch("/api/capture_config", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ interface: interfaceValue, device_address: deviceValue }),
-  });
-  const savedMsg = document.getElementById("capture-config-saved");
-  savedMsg.classList.remove("hidden");
-  clearTimeout(savedMsg._hideTimeout);
-  savedMsg._hideTimeout = setTimeout(() => savedMsg.classList.add("hidden"), 2000);
-});
+let captureConfigSaveTimeout = null;
+
+function scheduleCaptureConfigSave() {
+  // debounced, not saved on every keystroke — the backend restarts the
+  // capture thread when this changes while running, which you don't want
+  // happening on every character typed into the interface field
+  clearTimeout(captureConfigSaveTimeout);
+  captureConfigSaveTimeout = setTimeout(async () => {
+    const interfaceValue = document.getElementById("capture-interface").value.trim() || "usbmon3";
+    const deviceValue = Number(document.getElementById("capture-device").value) || 2;
+    await fetch("/api/capture_config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ interface: interfaceValue, device_address: deviceValue }),
+    });
+  }, 600);
+}
+
+document.getElementById("capture-interface").addEventListener("input", scheduleCaptureConfigSave);
+document.getElementById("capture-device").addEventListener("input", scheduleCaptureConfigSave);
 
 document.getElementById("scan-lsusb").addEventListener("click", async () => {
   const box = document.getElementById("lsusb-output");
@@ -1338,7 +1333,7 @@ async function checkCaptureStatus() {
   const status = await res.json();
   captureEnabled = status.enabled;
   const btn = document.getElementById("toggle-capture");
-  btn.textContent = captureEnabled ? "Disconnect" : "Connect";
+  btn.textContent = captureEnabled ? "Disable capture" : "Enable capture";
   btn.classList.toggle("active", captureEnabled);
 
   const statusEl = document.getElementById("capture-status");
@@ -1352,7 +1347,9 @@ async function checkCaptureStatus() {
 }
 
 document.getElementById("toggle-capture").addEventListener("click", async () => {
-  await fetch(`/api/capture/${captureEnabled ? "disable" : "enable"}`, { method: "POST" });
+  const enabling = !captureEnabled;
+  await fetch(`/api/capture/${enabling ? "enable" : "disable"}`, { method: "POST" });
+  setPollingInterval(enabling);
   checkCaptureStatus();
 });
 
