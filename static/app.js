@@ -121,6 +121,10 @@ function getActiveMonitorsForMessage(msg) {
 function render() {
   const scrollY = window.scrollY;
   const tableContainer = document.getElementById("capture-table");
+  // "near bottom" (not just exactly at bottom) so rounding/sub-pixel scroll
+  // math doesn't cause it to stop auto-following on every other render
+  const wasNearBottom =
+    tableContainer.scrollHeight - tableContainer.scrollTop - tableContainer.clientHeight < 40;
   const previouslySelected = new Set(
     Array.from(document.querySelectorAll(".row-select:checked")).map((cb) => Number(cb.dataset.index))
   );
@@ -220,6 +224,7 @@ function render() {
 
   if (previouslySelected.size > 0) updateSelectionUI();
   window.scrollTo(0, scrollY);
+  if (wasNearBottom) tableContainer.scrollTop = tableContainer.scrollHeight;
 }
 
 let replayContext = null; // {index, msg, label, fields} for whichever row's ⧉ was clicked
