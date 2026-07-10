@@ -46,16 +46,6 @@ function colorForLabel(name) {
 let showFullTimestamp = false; // default: time only
 let showAscii = true;
 
-const MESSAGE_PAGE_SIZE = 25;
-let visibleMessageCount = MESSAGE_PAGE_SIZE; // jumps to the full message count once, on scrolling up
-let scrollSentinelObserver = null; // disconnected and replaced each render to avoid leaking one per render
-
-function revealAllHistory() {
-  scrollSentinelObserver?.disconnect();
-  visibleMessageCount = state.messages.length; // reveal everything remaining in one shot, not another chunk
-  render();
-}
-
 function formatTimestamp(epochSeconds) {
   const d = new Date(epochSeconds * 1000);
   const pad = (n, len = 2) => String(n).padStart(len, "0");
@@ -146,23 +136,12 @@ function render() {
     ? state.messages.filter((m) => m.direction === directionFilter)
     : state.messages;
 
-  // Only the most recent `visibleMessageCount` messages are ever in the DOM —
-  // matters once a live capture has piled up thousands of rows. Scrolling
-  // near the top of the page reveals the rest, all at once (see the
-  // sentinel/observer below) rather than growing 25 at a time.
-  const windowStart = Math.max(0, filteredMessages.length - visibleMessageCount);
-  const windowedMessages = filteredMessages.slice(windowStart);
-  const hiddenOlderCount = windowStart;
-
   const maxLen = Math.max(0, ...state.messages.map((m) => m.length));
-  const sentinelHtml = hiddenOlderCount > 0
-    ? `<div id="scroll-sentinel" class="hint">▲ scroll up or click to load ${hiddenOlderCount} earlier message${hiddenOlderCount === 1 ? "" : "s"}</div>`
-    : "";
-  let html = sentinelHtml + "<table><thead><tr><th></th><th>#</th><th>dir</th><th>t</th>";
+  let html = "<table><thead><tr><th></th><th>#</th><th>dir</th><th>t</th>";
   for (let i = 0; i < maxLen; i++) html += `<th>${i}</th>`;
   html += `${showAscii ? "<th>ascii</th>" : ""}<th>label</th></tr></thead><tbody>`;
 
-  for (const msg of windowedMessages) {
+  for (const msg of filteredMessages) {
     const label = state.labels[msg.index];
     const monitors = getActiveMonitorsForMessage(msg);
     let isAnomaly = false;
@@ -209,33 +188,6 @@ function render() {
   tableContainer.innerHTML = html;
   renderLabelGroups();
   renderMonitorsPanel();
-
-  scrollSentinelObserver?.disconnect();
-  const sentinel = document.getElementById("scroll-sentinel");
-  if (sentinel) {
-    sentinel.style.cursor = "pointer";
-    sentinel.addEventListener("click", revealAllHistory);
-
-    // IntersectionObserver reports the CURRENT state as soon as .observe()
-    // starts, not just future changes — if the whole table already fits on
-    // screen with no need to scroll, the sentinel would be trivially
-    // "visible" immediately and this would fire right away with no real
-    // scroll gesture. Skip that first, non-scroll-triggered callback; only
-    // act once the intersection state actually changes. root is omitted
-    // (defaults to the browser viewport) since this now scrolls with the
-    // whole page, not a boxed-off pane. Note this also means: if the page
-    // never needs scrolling in the first place, this observer will never
-    // fire again — that's what the click handler above is for.
-    let isFirstCallback = true;
-    scrollSentinelObserver = new IntersectionObserver((entries) => {
-      if (isFirstCallback) {
-        isFirstCallback = false;
-        return;
-      }
-      if (entries[0].isIntersecting) revealAllHistory();
-    });
-    scrollSentinelObserver.observe(sentinel);
-  }
 
   document.querySelectorAll(".message-row").forEach((row) => {
     row.addEventListener("click", (e) => {

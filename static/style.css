@@ -34,7 +34,6 @@ th { color: #888; font-weight: normal; }
 /* wide byte-grid tables scroll horizontally within their own box instead of
    dragging the whole page into a side-scroll */
 #capture-table, #analysis-messages { max-width: 100%; overflow-x: auto; }
-#scroll-sentinel { text-align: center; padding: 0.4rem; }
 
 tr.message-row { cursor: pointer; transition: opacity 0.15s; }
 tr.message-row:hover { background: #222; }
