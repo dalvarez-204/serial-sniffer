@@ -17,7 +17,7 @@ def build_codegen_context(label, direction, deciphered_fields, capture_records, 
     checksum, every deciphered parameter for this label+direction (there can be
     several — e.g. a "set_waveform" command's wave_type/freq/amplitude/offset
     all live in one frame), and a few real sample messages."""
-    matching = [data for _, d, data in capture_records if d == direction]
+    matching = [data for _, _, d, data in capture_records if d == direction]
     if not matching:
         return None
 

@@ -53,10 +53,10 @@ def build_capture_view(filepath):
     # tshark can emit a record with usb.data_len > 0 but no actual capdata
     # (e.g. some control transfers) — those decode to zero-length messages
     # that have nothing to show or analyze, so drop them before indexing
-    records = [r for r in records if len(r[2]) > 0]
+    records = [r for r in records if len(r[3]) > 0]
 
     groups = {}
-    for _, direction, data in records:
+    for _, _, direction, data in records:
         key = group_key(direction, len(data))
         groups.setdefault(key, []).append(data)
 
@@ -76,9 +76,11 @@ def build_capture_view(filepath):
         }
 
     messages_view = []
-    for index, (timestamp, direction, data) in enumerate(records):
+    for seq, timestamp, direction, data in records:
         messages_view.append({
-            "index": index,
+            # a permanent identity, not a position — stays the same for this
+            # message even after older ones get trimmed out of the buffer
+            "index": seq,
             "timestamp": timestamp,
             "direction": direction,
             "length": len(data),
@@ -147,48 +149,71 @@ def save_monitors(monitors):
 # starting/stopping the subprocess on every toggle click. The one thing that
 # does need a restart is the interface/device_address themselves, since
 # those are baked into the tshark command at launch.
-capture_state = {"thread": None, "process_holder": {}, "enabled": False, "running": False}
+capture_state = {"thread": None, "process_holder": {}, "enabled": False, "running": False, "next_seq": 0}
 
-MAX_CAPTURE_MESSAGES = 200
+MAX_CAPTURE_MESSAGES = 300
 
 
 def _trim_capture_log():
     """Keeps the capture log bounded to the last MAX_CAPTURE_MESSAGES
     messages, so a long-running live capture doesn't grow the file (and the
-    in-browser table) without limit. Counts against the same non-zero-length
-    filtering build_capture_view applies, since that's what "message index"
-    actually means everywhere else (labels.json is keyed by that index, not
-    raw file line number) — dropping the oldest ones re-indexes labels.json
-    to match, or drops labels whose message fell out of the buffer."""
+    in-browser table) without limit. Each record's "seq" (see
+    load_capture_log) is its permanent identity, so trimming the oldest ones
+    off never changes what any surviving message is called — no
+    re-indexing needed, just drop labels whose message fell out of the
+    buffer."""
     if not os.path.exists(CAPTURE_FILE):
         return
     raw_records = list(load_capture_log(CAPTURE_FILE))
-    kept_positions = [i for i, r in enumerate(raw_records) if len(r[2]) > 0]
+    kept_positions = [i for i, r in enumerate(raw_records) if len(r[3]) > 0]
     if len(kept_positions) <= MAX_CAPTURE_MESSAGES:
         return
 
     drop_count = len(kept_positions) - MAX_CAPTURE_MESSAGES
     raw_cutoff = kept_positions[drop_count]  # first raw record to keep
+    kept_records = raw_records[raw_cutoff:]
     with open(CAPTURE_FILE, "w") as f:
-        for timestamp, direction, data in raw_records[raw_cutoff:]:
-            f.write(json.dumps({"timestamp": timestamp, "direction": direction, "data_hex": data.hex()}) + "\n")
+        for seq, timestamp, direction, data in kept_records:
+            f.write(json.dumps({"seq": seq, "timestamp": timestamp, "direction": direction, "data_hex": data.hex()}) + "\n")
 
-    reindexed = {}
-    for key, label in load_labels().items():
-        new_index = int(key) - drop_count
-        if new_index >= 0:
-            reindexed[str(new_index)] = label
-    save_labels(reindexed)
+    surviving_seqs = {seq for seq, _, _, data in kept_records if len(data) > 0}
+    labels = load_labels()
+    pruned = {key: label for key, label in labels.items() if int(key) in surviving_seqs}
+    if len(pruned) != len(labels):
+        save_labels(pruned)
+
+
+def _next_capture_seq():
+    """The next permanent message id to stamp on a newly captured record —
+    continues from whatever's already in the log (inferring fallback seq
+    for older records that predate this field) instead of restarting at 0
+    and colliding with messages already on screen."""
+    if not os.path.exists(CAPTURE_FILE):
+        return 0
+    max_seq = -1
+    for seq, _, _, _ in load_capture_log(CAPTURE_FILE):
+        max_seq = max(max_seq, seq)
+    return max_seq + 1
 
 
 def _capture_loop(interface, device_address):
     capture_state["process_holder"] = {}
     capture_state["running"] = True
+    # lives in capture_state (not a local variable) so "Clear all captures"
+    # can reset it back to 0 for a real fresh start, without needing to
+    # restart this thread — trimming the buffer, in contrast, never resets it
+    capture_state["next_seq"] = _next_capture_seq()
     try:
         for timestamp, direction, data in stream_usb_capture(interface, device_address, capture_state["process_holder"]):
             if not capture_state["enabled"]:
                 continue
-            record = {"timestamp": timestamp, "direction": direction, "data_hex": data.hex()}
+            record = {
+                "seq": capture_state["next_seq"],
+                "timestamp": timestamp,
+                "direction": direction,
+                "data_hex": data.hex(),
+            }
+            capture_state["next_seq"] += 1
             # reopen per write (not one long-held handle) so a "Clear all captures"
             # delete while this thread is running doesn't leave us writing to an
             # unlinked inode nothing can see
@@ -246,6 +271,7 @@ def api_clear_capture():
         os.remove(CAPTURE_FILE)
     if os.path.exists(LABELS_FILE):
         os.remove(LABELS_FILE)
+    capture_state["next_seq"] = 0  # a real fresh start, unlike buffer trimming which never resets this
     _capture_cache["key"] = None
     _capture_cache["messages"] = None
     _capture_cache["analysis"] = None

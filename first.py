@@ -45,11 +45,29 @@ def log_capture_to_file(interface: str, device_address: int, filepath: str):
             f.write(json.dumps(record) + "\n")
             f.flush()
 
-def load_capture_log(filepath:str):
+def load_capture_log(filepath: str):
+    """Yields (seq, timestamp, direction, data) for every record. "seq" is a
+    permanent message identity that survives the capture buffer trimming
+    older messages out — unlike a plain positional index, it never shifts
+    for a message that's still around. Older records written before this
+    field existed don't have one on disk; those get a fallback inferred by
+    counting non-zero-length records seen so far, which reproduces the old
+    enumerate-after-filtering behavior exactly (zero-length control-transfer
+    records are always dropped before "index" is shown anywhere, so their
+    own fallback value is never actually seen)."""
+    next_fallback_seq = 0
     with open(filepath) as f:
         for line in f:
             record = json.loads(line)
-            yield record["timestamp"], record["direction"], bytes.fromhex(record["data_hex"])
+            data = bytes.fromhex(record["data_hex"])
+            seq = record.get("seq")
+            if seq is None:
+                seq = next_fallback_seq
+                if len(data) > 0:
+                    next_fallback_seq += 1
+            else:
+                next_fallback_seq = max(next_fallback_seq, seq + 1)
+            yield seq, record["timestamp"], record["direction"], data
 
 def analyze_byte_variability(messages: list[bytes]):
     """ takes the messages and checks if they are fixed-length bitstrings,
@@ -199,7 +217,7 @@ if __name__ == "__main__":
         log_capture_to_file("usbmon3", 2, "capture_log.jsonl")
     elif sys.argv[1] == "analyze": 
         records = list(load_capture_log("capture_log.jsonl"))
-        out_messages = [data for ts, direction, data in records if direction == "OUT"]
+        out_messages = [data for seq, ts, direction, data in records if direction == "OUT"]
         for entry in analyze_byte_variability(out_messages):
             print(entry)
         print(find_checksum_range(out_messages))
