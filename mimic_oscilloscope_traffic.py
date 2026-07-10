@@ -21,6 +21,14 @@ ADC_PACKET_TYPE = 0x01
 
 CAPTURE_FILE = "capture_log.jsonl"
 
+# exposed as module constants (not just locals in main()) so a demo-seeding
+# script can label messages with the exact ground truth used to generate them
+AMPLITUDES = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
+VOLTAGES = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
+WAVE_TYPE = 0
+FREQ = 10
+OFFSET = 0.0
+
 
 def jitter(raw: int, i: int, spread: int = 3) -> int:
     """A real 12-bit ADC never returns the same count 16 times in a row —
@@ -70,9 +78,8 @@ def main():
     # OUT: sweep amplitude so find_scaled_value has real variation to search against.
     # Ground truth: amplitude byte is at overall frame offset 6 (START, len_lo, len_hi,
     # cmd, wave, freq, [amp], offset, chk, END), scale = 255/3.3 ~= 77.27 (not a decimal scale).
-    amplitudes = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
-    for amplitude in amplitudes:
-        frame = build_gen_command(wave_type=0, freq=10, amplitude_v=amplitude, offset_v=0.0)
+    for amplitude in AMPLITUDES:
+        frame = build_gen_command(wave_type=WAVE_TYPE, freq=FREQ, amplitude_v=amplitude, offset_v=OFFSET)
         records.append({"timestamp": t, "direction": "OUT", "data_hex": frame.hex()})
         t += 0.05
 
@@ -82,8 +89,7 @@ def main():
     # Ground truth: samples start at overall frame offset 5, little-endian
     # 16-bit, scale = 4095/3.3 ~= 1240.9 to go from volts to raw, or divide
     # raw by 4095 then multiply by 3.3 to go the other way.
-    voltages = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
-    for voltage in voltages:
+    for voltage in VOLTAGES:
         raw = to_4095(voltage)
         samples = [jitter(raw, i) for i in range(16)]
         frame = build_adc_packet(channel=0, samples=samples)
@@ -95,8 +101,8 @@ def main():
             f.write(json.dumps(record) + "\n")
 
     print(f"Appended {len(records)} synthetic records to {CAPTURE_FILE}")
-    print(f"OUT ground truth: amplitude sweep {amplitudes} (volts), byte offset 6, scale 255/3.3")
-    print(f"IN ground truth: channel 0 only, voltage sweep {voltages} (volts), byte offset 5+ (little-endian), scale 4095/3.3")
+    print(f"OUT ground truth: amplitude sweep {AMPLITUDES} (volts), byte offset 6, scale 255/3.3")
+    print(f"IN ground truth: channel 0 only, voltage sweep {VOLTAGES} (volts), byte offset 5+ (little-endian), scale 4095/3.3")
 
 
 if __name__ == "__main__":

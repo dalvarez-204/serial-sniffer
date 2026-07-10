@@ -97,7 +97,7 @@
       <input id="label-name" type="text" placeholder="e.g. set_voltage" autocomplete="off">
       <div id="label-name-suggestions" class="suggestions hidden"></div>
     </label>
-    <label>Value <span class="info-icon" title="Numeric — e.g. the voltage you set or read for this message. Used to auto-fill expected values when analyzing this label as a group.">ⓘ</span>
+    <label>Value <span class="info-icon" title="Numeric — e.g. the voltage you set or read for this message. Used to auto-fill expected values when analyzing this label as a group. A message can carry several deciphered fields even though it only has one Value here — name each one when you Mark deciphered or Watch a specific match.">ⓘ</span>
       <input id="label-value" type="text" placeholder="e.g. 5.0">
     </label>
     <label>Notes
@@ -110,11 +110,31 @@
 
   <div id="watch-panel" class="modal-panel hidden">
     <h2>Watch this match</h2>
+    <label>Name this field <span class="info-icon" title="What this specific byte range represents (e.g. amplitude) — a message label can have several of these watched/deciphered independently.">ⓘ</span>
+      <input id="watch-param-name" type="text" placeholder="e.g. amplitude">
+    </label>
     <label>Tolerance <span class="info-icon" title="Allowed deviation before flagging as an anomaly, compared against each message's own labeled Value, not a fixed baseline.">ⓘ</span>
       <input id="watch-tolerance" type="text" placeholder="e.g. 0.15">
     </label>
     <button id="watch-save">Start watching</button>
     <button id="watch-cancel">Cancel</button>
+  </div>
+
+  <div id="decipher-name-panel" class="modal-panel hidden">
+    <h2>Mark deciphered</h2>
+    <label>Name this field <span class="info-icon" title="What this specific byte range represents (e.g. amplitude) — a message label can have several of these deciphered independently, each named separately.">ⓘ</span>
+      <input id="decipher-param-name" type="text" placeholder="e.g. amplitude">
+    </label>
+    <button id="decipher-name-save">Save</button>
+    <button id="decipher-name-cancel">Cancel</button>
+  </div>
+
+  <div id="replay-panel" class="modal-panel hidden">
+    <h2 id="replay-title">Duplicate message</h2>
+    <div id="replay-form"></div>
+    <pre id="replay-snippet"></pre>
+    <button id="replay-copy">Copy to clipboard</button>
+    <button id="replay-close">Close</button>
   </div>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>

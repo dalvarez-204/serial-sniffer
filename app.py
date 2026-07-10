@@ -31,8 +31,8 @@ CAPTURE_CONFIG_FILE = "capture_config.json"
 MONITORS_FILE = "monitors.json"
 
 
-def deciphered_key(label, direction):
-    return f"{label}::{direction}"
+def deciphered_key(label, direction, param):
+    return f"{label}::{direction}::{param}"
 
 
 def group_key(direction, length):
@@ -318,11 +318,12 @@ def api_label():
 @app.route("/api/deciphered", methods=["POST"])
 def api_save_deciphered():
     payload = request.get_json()
-    key = deciphered_key(payload["label"], payload["direction"])
+    key = deciphered_key(payload["label"], payload["direction"], payload["param"])
     deciphered = load_deciphered()
     deciphered[key] = {
         "label": payload["label"],
         "direction": payload["direction"],
+        "param": payload["param"],
         "start": payload["start"],
         "end": payload["end"],
         "byte_order": payload["byte_order"],
@@ -335,19 +336,20 @@ def api_save_deciphered():
 @app.route("/api/monitors", methods=["POST"])
 def api_save_monitor():
     payload = request.get_json()
-    key = deciphered_key(payload["label"], payload["direction"])
+    key = deciphered_key(payload["label"], payload["direction"], payload["param"])
     monitors = load_monitors()
     monitors[key] = {
         "label": payload["label"],
         "direction": payload["direction"],
+        "param": payload["param"],
         "start": payload["start"],
         "end": payload["end"],
         "byte_order": payload["byte_order"],
         "scale": payload["scale"],
         "precision": payload.get("precision"),
         # no fixed baseline here — each message is checked against its own
-        # label value, so the watch only "activates" once a message has both
-        # the matching label and a value entered
+        # label's param value, so the watch only "activates" once a message
+        # has both the matching label and that param's value entered
         "tolerance": payload.get("tolerance", 0),
     }
     save_monitors(monitors)
@@ -357,7 +359,7 @@ def api_save_monitor():
 @app.route("/api/monitors", methods=["DELETE"])
 def api_delete_monitor():
     payload = request.get_json()
-    key = deciphered_key(payload["label"], payload["direction"])
+    key = deciphered_key(payload["label"], payload["direction"], payload["param"])
     monitors = load_monitors()
     monitors.pop(key, None)
     save_monitors(monitors)
@@ -375,7 +377,14 @@ def api_generate_driver():
 
     records = list(load_capture_log(CAPTURE_FILE))
     _, analysis = build_capture_view(CAPTURE_FILE)
-    context = build_codegen_context(label, direction, load_deciphered(), records, analysis)
+    deciphered_fields = [
+        d for d in load_deciphered().values()
+        if d["label"] == label and d["direction"] == direction
+    ]
+    if not deciphered_fields:
+        return jsonify({"error": "no deciphered parameters for this label/direction yet"}), 400
+
+    context = build_codegen_context(label, direction, deciphered_fields, records, analysis)
     if context is None:
         return jsonify({"error": f'no "{direction}" messages found'}), 400
 

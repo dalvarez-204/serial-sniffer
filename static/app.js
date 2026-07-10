@@ -6,10 +6,18 @@ let lastDebugHtml = "";
 let lastExpectedValues = [];
 let spanSelection = { start: null, end: null };
 let lastCheckedIndex = null;
-let analysisContext = null; // {label, direction} when the current analysis was launched from a label group
+let analysisContext = null; // {label, direction, param} when the current analysis was launched from a label group
 
-function decipheredKey(label, direction) {
-  return `${label}::${direction}`;
+// A message label can carry several named parameters at once (e.g. a
+// "set_waveform" command's wave_type/freq/amplitude/offset all live in one
+// frame) — these look up every deciphered/watched field for a label+direction,
+// not just one.
+function decipheredFieldsFor(label, direction) {
+  return Object.values(state.deciphered).filter((d) => d.label === label && d.direction === direction);
+}
+
+function monitorsFor(label, direction) {
+  return Object.values(state.monitors).filter((m) => m.label === label && m.direction === direction);
 }
 
 function colorForLabel(name) {
@@ -86,13 +94,13 @@ function decodeHexSpan(hexBytes, start, end, order) {
   return parseInt(ordered.join(""), 16);
 }
 
-function getActiveMonitorForMessage(msg) {
+function getActiveMonitorsForMessage(msg) {
   const label = state.labels[msg.index];
-  if (!label || !label.name) return null;
-  // the watch only "activates" for this message once it has its own value —
+  if (!label || !label.name) return [];
+  // a watch only "activates" for this message once it has its own value —
   // there's no fixed baseline, each message is checked against its own entry
-  if (Number.isNaN(parseFloat(label.value))) return null;
-  return state.monitors[decipheredKey(label.name, msg.direction)] || null;
+  if (Number.isNaN(parseFloat(label.value))) return [];
+  return monitorsFor(label.name, msg.direction);
 }
 
 function render() {
@@ -114,13 +122,14 @@ function render() {
 
   for (const msg of state.messages) {
     const label = state.labels[msg.index];
-    const monitor = getActiveMonitorForMessage(msg);
+    const monitors = getActiveMonitorsForMessage(msg);
     let isAnomaly = false;
-    if (monitor) {
+    for (const monitor of monitors) {
       const decoded = decodeHexSpan(msg.hex_bytes, monitor.start, monitor.end, monitor.byte_order) / monitor.scale;
       const expected = parseFloat(label.value);
-      isAnomaly = Math.abs(decoded - expected) > monitor.tolerance;
+      if (Math.abs(decoded - expected) > monitor.tolerance) isAnomaly = true;
     }
+    const decipheredFields = label && label.name ? decipheredFieldsFor(label.name, msg.direction) : [];
     html += `<tr class="message-row ${isAnomaly ? "anomaly" : ""}" data-index="${msg.index}">`;
     html += `<td><input type="checkbox" class="row-select" data-index="${msg.index}"></td>`;
     html += `<td>${msg.index}</td>`;
@@ -130,20 +139,30 @@ function render() {
       const byte = msg.hex_bytes[i];
       if (byte === undefined) { html += "<td></td>"; continue; }
       let cls = byteClass(msg.group_key, i, state.analysis);
-      if (label && label.name) {
-        const entry = state.deciphered[decipheredKey(label.name, msg.direction)];
-        if (entry && i >= entry.start && i <= entry.end) cls += " deciphered";
+      const decipheredField = decipheredFields.find((entry) => i >= entry.start && i <= entry.end);
+      let titleAttr = "";
+      if (decipheredField) {
+        cls += " deciphered";
+        titleAttr = ` title="${decipheredField.param}"`;
+        // a thin seam between adjacent-but-different named fields, since both
+        // would otherwise be the same gold glow with no visible boundary
+        const prevField = decipheredFields.find((entry) => i - 1 >= entry.start && i - 1 <= entry.end);
+        if (!prevField || prevField.param !== decipheredField.param) cls += " deciphered-boundary";
       }
-      if (monitor && i >= monitor.start && i <= monitor.end) cls += " monitored-byte";
-      html += `<td class="byte ${cls}">${byte}</td>`;
+      if (monitors.some((m) => i >= m.start && i <= m.end)) cls += " monitored-byte";
+      html += `<td class="byte ${cls}"${titleAttr}>${byte}</td>`;
     }
     if (showAscii) html += `<td>${msg.ascii}</td>`;
-    const eyeIcon = monitor ? ` <span class="eye-icon" title="${isAnomaly ? "Anomaly detected!" : "Being monitored"}">${isAnomaly ? "👁⚠" : "👁"}</span>` : "";
+    const eyeIcon = monitors.length ? ` <span class="eye-icon" title="${isAnomaly ? "Anomaly detected!" : "Being monitored"}">${isAnomaly ? "👁⚠" : "👁"}</span>` : "";
     const labelHtml =
       label && label.name
         ? `<span style="color: ${colorForLabel(label.name)}">● ${label.name}</span>`
         : "+ label";
-    html += `<td class="label-cell">${labelHtml}${eyeIcon}</td>`;
+    const duplicateIcon = `<span class="row-action-icon duplicate-icon" data-index="${msg.index}" title="Duplicate: get a snippet that resends this exact message, no protocol knowledge needed">⧉</span>`;
+    const replicateIcon = decipheredFields.length
+      ? `<span class="row-action-icon replicate-icon" data-index="${msg.index}" title="Replicate: get a snippet that sends this command with different values">⇄</span>`
+      : "";
+    html += `<td class="label-cell">${labelHtml}${eyeIcon}${duplicateIcon}${replicateIcon}</td>`;
     html += "</tr>";
   }
   html += "</tbody></table>";
@@ -172,9 +191,74 @@ function render() {
     });
     if (previouslySelected.has(Number(cb.dataset.index))) cb.checked = true;
   });
+
+  document.querySelectorAll(".duplicate-icon").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openDuplicatePanel(Number(el.dataset.index), el);
+    });
+  });
+
+  document.querySelectorAll(".replicate-icon").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openReplicatePanel(Number(el.dataset.index), el);
+    });
+  });
+
   if (previouslySelected.size > 0) updateSelectionUI();
   window.scrollTo(0, scrollY);
 }
+
+function openDuplicatePanel(index, anchorEl) {
+  const msg = state.messages.find((m) => m.index === index);
+  if (!msg) return;
+  const hex = msg.hex_bytes.join("");
+  document.getElementById("replay-title").textContent = `Duplicate message #${index}`;
+  document.getElementById("replay-form").innerHTML =
+    '<p class="hint">Resends the exact captured bytes verbatim — no protocol knowledge needed.</p>';
+  document.getElementById("replay-snippet").textContent = `ser.write(bytes.fromhex("${hex}"))`;
+  positionPanelNear(document.getElementById("replay-panel"), anchorEl);
+  document.getElementById("replay-panel").classList.remove("hidden");
+}
+
+function openReplicatePanel(index, anchorEl) {
+  const msg = state.messages.find((m) => m.index === index);
+  const label = state.labels[index];
+  if (!msg || !label || !label.name) return;
+  const fields = decipheredFieldsFor(label.name, msg.direction);
+  if (!fields.length) return;
+
+  document.getElementById("replay-title").textContent = `Replicate "${label.name}" (${msg.direction})`;
+  const formHtml = fields
+    .map((f) => `<label>${f.param} <input class="replicate-param-input" data-param="${f.param}" type="text" placeholder="new value"></label>`)
+    .join("");
+  document.getElementById("replay-form").innerHTML =
+    `<p class="hint">Sends the same command with different values — requires the generated <code>encode_${label.name}()</code> driver function (use "Generate driver function" on this label group first).</p>${formHtml}`;
+
+  const updateSnippet = () => {
+    const args = fields
+      .map((f) => {
+        const input = document.querySelector(`.replicate-param-input[data-param="${f.param}"]`);
+        return `${f.param}=${input.value || 0}`;
+      })
+      .join(", ");
+    document.getElementById("replay-snippet").textContent = `ser.write(encode_${label.name}(${args}))`;
+  };
+  document.querySelectorAll(".replicate-param-input").forEach((input) => input.addEventListener("input", updateSnippet));
+  updateSnippet();
+
+  positionPanelNear(document.getElementById("replay-panel"), anchorEl);
+  document.getElementById("replay-panel").classList.remove("hidden");
+}
+
+document.getElementById("replay-close").addEventListener("click", () => {
+  document.getElementById("replay-panel").classList.add("hidden");
+});
+
+document.getElementById("replay-copy").addEventListener("click", async () => {
+  await navigator.clipboard.writeText(document.getElementById("replay-snippet").textContent);
+});
 
 function applySelectionClick(index, checked, shiftKey) {
   if (checked && pollingEnabled) {
@@ -228,6 +312,14 @@ function openLabelPanel(index) {
   document.getElementById("label-name").focus();
 }
 
+document.getElementById("label-value").addEventListener("input", (e) => {
+  const entry = analysisSet.find((m) => m.index === state.activeIndex);
+  if (entry) {
+    entry.expected = e.target.value;
+    renderAnalysisPanel();
+  }
+});
+
 function getKnownLabelNames() {
   const names = new Set();
   Object.values(state.labels).forEach((l) => { if (l && l.name) names.add(l.name); });
@@ -239,6 +331,7 @@ function hideNameSuggestions() {
   const box = document.getElementById("label-name-suggestions");
   box.classList.add("hidden");
   box.innerHTML = "";
+  tabCycleIndex = -1;
 }
 
 let tabCycleIndex = -1;
@@ -290,10 +383,15 @@ document.getElementById("label-name").addEventListener("keydown", (e) => {
 document.getElementById("label-name").addEventListener("blur", hideNameSuggestions);
 
 document.getElementById("label-panel").addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && e.target.id !== "label-notes") {
-    e.preventDefault();
-    document.getElementById("label-save").click();
+  if (e.key !== "Enter" || e.target.id === "label-notes" || e.target.tagName === "BUTTON") return;
+  e.preventDefault();
+  const box = document.getElementById("label-name-suggestions");
+  if (e.target.id === "label-name" && !box.classList.contains("hidden") && tabCycleIndex >= 0) {
+    // mid tab-cycle: Enter confirms the highlighted suggestion, it doesn't submit
+    hideNameSuggestions();
+    return;
   }
+  document.getElementById("label-save").click();
 });
 
 document.getElementById("label-close").addEventListener("click", () => {
@@ -694,15 +792,18 @@ function renderMatchResults() {
           const entriesHtml = group.entries
             .map((m) => {
               const avgDecoded = m.decoded_values.reduce((a, b) => a + b, 0) / m.decoded_values.length;
-              const saveBtn = analysisContext
-                ? ` <button class="save-deciphered-btn link-action-btn" data-start="${m.start}" data-end="${m.end}" data-order="${m.byte_order}" data-scale="${m.scale}" title='Mark deciphered for "${analysisContext.label}" (${analysisContext.direction})'>+ mark deciphered</button>
-                    <button class="watch-btn link-action-btn" data-start="${m.start}" data-end="${m.end}" data-order="${m.byte_order}" data-scale="${m.scale}" data-precision="${m.precision ?? ""}" data-avg-decoded="${avgDecoded}">👁 watch</button>`
+              const actionsHtml = analysisContext
+                ? `<div class="match-actions">
+                     <button class="save-deciphered-btn" data-start="${m.start}" data-end="${m.end}" data-order="${m.byte_order}" data-scale="${m.scale}" title='Mark deciphered for "${analysisContext.label}" (${analysisContext.direction})'>Mark deciphered</button>
+                     <button class="watch-btn" data-start="${m.start}" data-end="${m.end}" data-order="${m.byte_order}" data-scale="${m.scale}" data-precision="${m.precision ?? ""}" data-avg-decoded="${avgDecoded}">👁 Watch</button>
+                   </div>`
                 : "";
               const decoded = m.decoded_values.map((v) => v.toFixed(3)).join(", ");
               const precisionNote = m.precision ? ` <span class="precision-note">(precision ${m.precision})</span>` : "";
               return `<li>
                 <div class="match-primary">decoded: [${decoded}] <span class="hint">vs expected [${lastExpectedValues}]</span></div>
-                <div class="match-secondary hint">${m.byte_order}-endian · scale ${formatScale(m.scale)}${precisionNote}${saveBtn}</div>
+                <div class="match-secondary hint">${m.byte_order}-endian · scale ${formatScale(m.scale)}${precisionNote}</div>
+                ${actionsHtml}
               </li>`;
             })
             .join("");
@@ -741,20 +842,20 @@ function renderMatchResults() {
   });
 
   document.querySelectorAll(".save-deciphered-btn").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      await fetch("/api/deciphered", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          label: analysisContext.label,
-          direction: analysisContext.direction,
-          start: Number(btn.dataset.start),
-          end: Number(btn.dataset.end),
-          byte_order: btn.dataset.order,
-          scale: Number(btn.dataset.scale),
-        }),
-      });
-      await loadData();
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      pendingDecipher = {
+        label: analysisContext.label,
+        direction: analysisContext.direction,
+        start: Number(btn.dataset.start),
+        end: Number(btn.dataset.end),
+        byte_order: btn.dataset.order,
+        scale: Number(btn.dataset.scale),
+      };
+      document.getElementById("decipher-param-name").value = "";
+      positionPanelNear(document.getElementById("decipher-name-panel"), btn);
+      document.getElementById("decipher-name-panel").classList.remove("hidden");
+      document.getElementById("decipher-param-name").focus();
     });
   });
 
@@ -770,21 +871,51 @@ function renderMatchResults() {
         scale: Number(btn.dataset.scale),
         precision: btn.dataset.precision ? Number(btn.dataset.precision) : null,
       };
+      document.getElementById("watch-param-name").value = "";
       document.getElementById("watch-tolerance").value = document.getElementById("tolerance").value || "0.15";
+      positionPanelNear(document.getElementById("watch-panel"), btn);
       document.getElementById("watch-panel").classList.remove("hidden");
+      document.getElementById("watch-param-name").focus();
     });
   });
 }
 
+function positionPanelNear(panel, anchorEl) {
+  const rect = anchorEl.getBoundingClientRect();
+  const width = panel.offsetWidth || 320;
+  // the panel is still hidden (display:none) when this runs, so offsetHeight
+  // reads 0 — fall back to a reasonable estimate for a small modal
+  const height = panel.offsetHeight || 220;
+  const margin = 12;
+  let left = rect.left;
+  let top = rect.bottom + 8;
+  if (left + width > window.innerWidth - margin) left = window.innerWidth - width - margin;
+  if (left < margin) left = margin;
+  if (top + height > window.innerHeight - margin) {
+    // not enough room below the anchor — flip above it instead, since this
+    // is position:fixed and won't scroll into view once the page moves
+    top = rect.top - height - 8;
+  }
+  if (top < margin) top = margin;
+  panel.style.left = `${left}px`;
+  panel.style.top = `${top}px`;
+}
+
 let pendingWatch = null;
+let pendingDecipher = null;
 
 document.getElementById("watch-save").addEventListener("click", async () => {
   if (!pendingWatch) return;
+  const param = document.getElementById("watch-param-name").value.trim();
+  if (!param) {
+    document.getElementById("watch-param-name").focus();
+    return;
+  }
   const tolerance = Number(document.getElementById("watch-tolerance").value) || 0.15;
   await fetch("/api/monitors", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...pendingWatch, tolerance }),
+    body: JSON.stringify({ ...pendingWatch, param, tolerance }),
   });
   pendingWatch = null;
   document.getElementById("watch-panel").classList.add("hidden");
@@ -794,6 +925,28 @@ document.getElementById("watch-save").addEventListener("click", async () => {
 document.getElementById("watch-cancel").addEventListener("click", () => {
   pendingWatch = null;
   document.getElementById("watch-panel").classList.add("hidden");
+});
+
+document.getElementById("decipher-name-save").addEventListener("click", async () => {
+  if (!pendingDecipher) return;
+  const param = document.getElementById("decipher-param-name").value.trim();
+  if (!param) {
+    document.getElementById("decipher-param-name").focus();
+    return;
+  }
+  await fetch("/api/deciphered", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...pendingDecipher, param }),
+  });
+  pendingDecipher = null;
+  document.getElementById("decipher-name-panel").classList.add("hidden");
+  await loadData();
+});
+
+document.getElementById("decipher-name-cancel").addEventListener("click", () => {
+  pendingDecipher = null;
+  document.getElementById("decipher-name-panel").classList.add("hidden");
 });
 
 document.getElementById("search-btn").addEventListener("click", runSearch);
@@ -831,11 +984,11 @@ function renderMonitorsPanel() {
     const deciphered = state.deciphered[key];
     const decipherHtml = deciphered
       ? ` <span class="deciphered-note">deciphered: bytes [${deciphered.start}-${deciphered.end}], ${deciphered.byte_order}-endian, scale ${deciphered.scale}</span>`
-      : ` <button class="mark-deciphered-from-monitor-btn link-action-btn" data-key="${key}">+ mark deciphered</button>`;
+      : ` <button class="mark-deciphered-from-monitor-btn" data-key="${key}">Mark deciphered</button>`;
     html += `<li>
-      <strong>${monitor.label}</strong> (${monitor.direction}), bytes [${monitor.start}-${monitor.end}], ${monitor.byte_order}-endian, scale ${formatScale(monitor.scale)}${precisionNote} —
+      <strong>${monitor.label}</strong> (${monitor.direction}) — param "${monitor.param}", bytes [${monitor.start}-${monitor.end}], ${monitor.byte_order}-endian, scale ${formatScale(monitor.scale)}${precisionNote} —
       tolerance ± ${monitor.tolerance}: ${statusHtml}
-      <button class="stop-watch-btn" data-label="${monitor.label}" data-direction="${monitor.direction}">Stop watching</button>${decipherHtml}
+      <button class="stop-watch-btn" data-label="${monitor.label}" data-direction="${monitor.direction}" data-param="${monitor.param}">Stop watching</button>${decipherHtml}
     </li>`;
   }
   html += "</ul>";
@@ -846,7 +999,7 @@ function renderMonitorsPanel() {
       await fetch("/api/monitors", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ label: btn.dataset.label, direction: btn.dataset.direction }),
+        body: JSON.stringify({ label: btn.dataset.label, direction: btn.dataset.direction, param: btn.dataset.param }),
       });
       await loadData();
     });
@@ -861,6 +1014,7 @@ function renderMonitorsPanel() {
         body: JSON.stringify({
           label: monitor.label,
           direction: monitor.direction,
+          param: monitor.param,
           start: monitor.start,
           end: monitor.end,
           byte_order: monitor.byte_order,
@@ -879,7 +1033,7 @@ function renderLabelGroups() {
     const index = Number(indexStr);
     const msg = state.messages.find((m) => m.index === index);
     if (!msg) continue;
-    const key = decipheredKey(label.name, msg.direction);
+    const key = `${label.name}::${msg.direction}`;
     groups[key] = groups[key] || { name: label.name, direction: msg.direction, members: [] };
     const value = parseFloat(label.value);
     groups[key].members.push({ index, value: Number.isNaN(value) ? null : value });
@@ -897,14 +1051,22 @@ function renderLabelGroups() {
     const group = groups[key];
     const withValues = group.members.filter((m) => m.value !== null);
     const distinctValues = new Set(withValues.map((m) => m.value)).size;
-    const deciphered = state.deciphered[key];
-    const decipheredNote = deciphered
-      ? ` — <span class="deciphered-note">deciphered: bytes [${deciphered.start}-${deciphered.end}], ${deciphered.byte_order}-endian, scale ${deciphered.scale}</span>`
+
+    // One message label can still carry several independently deciphered
+    // fields (e.g. a "set_waveform" command's wave_type/freq/amplitude/offset)
+    // — they just aren't named up front here. Naming happens per-match when
+    // you Mark deciphered or Watch, so this just lists what's been named so far.
+    const decipheredFields = decipheredFieldsFor(group.name, group.direction);
+    const decipheredNote = decipheredFields.length
+      ? ` — <span class="deciphered-note">deciphered: ${decipheredFields
+          .map((d) => `${d.param} (bytes [${d.start}-${d.end}], ${d.byte_order}-endian, scale ${formatScale(d.scale)})`)
+          .join(", ")}</span>`
       : "";
+
     html += `<li>
       <strong>${group.name}</strong> (${group.direction}, ${group.members.length} labeled, ${withValues.length} with a value, ${distinctValues} distinct)${decipheredNote}
       <button class="analyze-group-btn" data-key="${key}" ${distinctValues < 2 ? "disabled" : ""}>Analyze</button>
-      <button class="generate-driver-btn" data-label="${group.name}" data-direction="${group.direction}" ${deciphered ? "" : "disabled"} title="${deciphered ? "" : "Mark deciphered first"}">Generate driver function</button>
+      <button class="generate-driver-btn" data-label="${group.name}" data-direction="${group.direction}" ${decipheredFields.length ? "" : "disabled"} title="${decipheredFields.length ? "" : "Mark deciphered first"}">Generate driver function</button>
     </li>`;
   }
   html += "</ul>";
