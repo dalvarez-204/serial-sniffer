@@ -129,16 +129,23 @@ function render() {
     Array.from(document.querySelectorAll(".row-select:checked")).map((cb) => Number(cb.dataset.index))
   );
 
-  const warnings = confidenceWarnings(state.analysis);
-  const warningHtml = warnings.length
-    ? `<div class="warning-banner"><strong>Low-confidence groups:</strong><ul>${warnings.map((w) => `<li>${w}</li>`).join("")}</ul></div>`
-    : "";
-  document.getElementById("confidence-warnings").innerHTML = warningHtml;
-
   const directionFilter = document.getElementById("direction-filter").value;
   const filteredMessages = directionFilter
     ? state.messages.filter((m) => m.direction === directionFilter)
     : state.messages;
+
+  // Only warn about groups that actually have a message in view right now —
+  // otherwise switching to "OUT only" still shows warnings about IN groups
+  // you can't even see, which reads as noise unrelated to what's on screen.
+  const visibleGroupKeys = new Set(filteredMessages.map((m) => m.group_key));
+  const visibleAnalysis = Object.fromEntries(
+    Object.entries(state.analysis).filter(([key]) => visibleGroupKeys.has(key))
+  );
+  const warnings = confidenceWarnings(visibleAnalysis);
+  const warningHtml = warnings.length
+    ? `<div class="warning-banner"><strong>Low-confidence groups:</strong><ul>${warnings.map((w) => `<li>${w}</li>`).join("")}</ul></div>`
+    : "";
+  document.getElementById("confidence-warnings").innerHTML = warningHtml;
 
   const maxLen = Math.max(0, ...state.messages.map((m) => m.length));
   let html = "<table><thead><tr><th></th><th>#</th><th>dir</th><th>t</th>";
@@ -783,7 +790,11 @@ async function runSearch() {
   const searchDirection = getSearchDirection();
   const byte_order = getKnownByteOrder(searchDirection);
   const requestBody = {
-    indices: analysisSet.map((m) => m.index),
+    // the actual bytes shown in the Analysis panel, not a message index —
+    // an index isn't a stable identity once the capture buffer can trim
+    // older messages while a live capture is still running, which would
+    // otherwise make the server search completely different bytes
+    messages_hex: analysisSet.map((m) => m.hexBytes.join("")),
     expected_values: expectedValues,
     tolerance,
     scales,
@@ -805,7 +816,7 @@ async function runSearch() {
 
   const rangeNote = min_value !== null && max_value !== null ? `, device range [${min_value}, ${max_value}] (adds one derived precision-based scale per span)` : "";
   const byteOrderNote = byte_order ? `, assuming <strong>${byte_order}-endian</strong> (a "${searchDirection}" field has already been deciphered with this order)` : "";
-  lastDebugHtml = `<p class="hint">Searched indices [${requestBody.indices}] with expected values [${requestBody.expected_values}], tolerance ${requestBody.tolerance}, scales ${requestBody.scales ? `[${requestBody.scales}]` : "(common defaults)"}, span ${requestBody.span ? `[${requestBody.span}]` : "(whole message — none set)"}${rangeNote}${byteOrderNote}.</p>`;
+  lastDebugHtml = `<p class="hint">Searched messages [${analysisSet.map((m) => m.index)}] with expected values [${requestBody.expected_values}], tolerance ${requestBody.tolerance}, scales ${requestBody.scales ? `[${requestBody.scales}]` : "(common defaults)"}, span ${requestBody.span ? `[${requestBody.span}]` : "(whole message — none set)"}${rangeNote}${byteOrderNote}.</p>`;
   lastExpectedValues = expectedValues;
 
   renderMatchResults();
@@ -1148,20 +1159,40 @@ function renderLabelGroups() {
   });
 }
 
+let driverGenerationSpinner = null;
+
+function startDriverGenerationSpinner(codeEl) {
+  clearInterval(driverGenerationSpinner);
+  let dots = 0;
+  codeEl.textContent = "Generating";
+  driverGenerationSpinner = setInterval(() => {
+    dots = (dots + 1) % 4;
+    codeEl.textContent = "Generating" + ".".repeat(dots);
+  }, 400);
+}
+
 async function generateDriver(label, direction) {
   const panel = document.getElementById("driver-panel");
   const codeEl = document.getElementById("driver-code");
   const noteEl = document.getElementById("driver-mock-note");
   panel.classList.remove("hidden");
-  codeEl.textContent = "Generating…";
   noteEl.textContent = "";
+  startDriverGenerationSpinner(codeEl);
 
-  const res = await fetch("/api/generate_driver", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ label, direction }),
-  });
-  const result = await res.json();
+  let result;
+  try {
+    const res = await fetch("/api/generate_driver", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label, direction }),
+    });
+    result = await res.json();
+  } catch (e) {
+    clearInterval(driverGenerationSpinner);
+    codeEl.textContent = `Error: request failed (${e.message}) — check that the server is running and reachable.`;
+    return;
+  }
+  clearInterval(driverGenerationSpinner);
   if (result.error) {
     codeEl.textContent = `Error: ${result.error}`;
     return;
@@ -1173,6 +1204,7 @@ async function generateDriver(label, direction) {
 }
 
 document.getElementById("driver-close").addEventListener("click", () => {
+  clearInterval(driverGenerationSpinner);
   document.getElementById("driver-panel").classList.add("hidden");
 });
 

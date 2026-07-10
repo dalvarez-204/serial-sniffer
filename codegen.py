@@ -64,32 +64,50 @@ own "{example_field["param"]}" field (scale {example_field["scale"]}): a real va
 encodes to raw {example_raw}, and decoding raw {example_raw} back gives approximately 1.0.
 Do not invert this.{correction_note}
 
-Write:
-1. `encode_{context["label"]}({", ".join(f"{p}: float" for p in param_names)}) -> bytes` — \
-builds a full outgoing frame with each named parameter written into its own deciphered byte \
-range using its given byte order and scale, and every other byte held at whatever constant \
-value appears across the sample messages (recompute the checksum from the "checksum" info if \
-one was found; don't hardcode it).
-2. `decode_{context["label"]}(data: bytes) -> dict` — extracts every deciphered parameter \
-from an incoming message of this shape and returns them as a dict keyed by parameter name.
+{_task_instructions(context, param_names)}
 
-Only fully implement the direction that's actually given ("{context["direction"]}"); write \
-the other function as the natural inverse using the same sample bytes as the constant \
-template. Include type hints and one short docstring per function. Output ONLY the Python \
-code, no prose, no markdown fences.
+Include type hints and one short docstring. Output ONLY the Python code, no prose, no \
+markdown fences.
 """
+
+
+def _task_instructions(context, param_names):
+    label = context["label"]
+    if context["direction"] == "OUT":
+        return f"""Write `encode_{label}({", ".join(f"{p}: float" for p in param_names)}) -> bytes` — \
+builds a full outgoing frame with each named parameter written into its own deciphered byte \
+range using its given byte order and scale. Every byte NOT covered by a deciphered field must \
+be copied verbatim from the first sample message above — regardless of whether \
+"byte_variability" calls it constant or varying, since it hasn't been deciphered there is no \
+ground truth for what it should be, so hold it fixed rather than guessing (the one exception: \
+recompute the checksum from the "checksum" info if one was found — don't hardcode it).
+
+This is an outgoing (OUT) message — CLOAK only ever sends this shape, never receives it, so \
+do NOT write a decode function, only encode_{label}."""
+    return f"""Write `decode_{label}(data: bytes) -> dict` — extracts every deciphered \
+parameter from an incoming message of this shape and returns them as a dict keyed by \
+parameter name.
+
+This is an incoming (IN) message — CLOAK only ever receives this shape, never constructs it, \
+so do NOT write an encode function, only decode_{label}."""
 
 
 def _mock_response(context):
     label = context["label"]
+    direction = context["direction"]
     param_names = [f["param"] for f in context["deciphered_fields"]] or ["value"]
     args = ", ".join(f"{p}: float" for p in param_names)
-    return (
+    header = (
         "# MOCK OUTPUT — no ANTHROPIC_API_KEY set on the server.\n"
         "# Export one and retry to get a real generated function from Claude.\n"
         f"# Context that would have been sent:\n# {json.dumps(context)}\n\n"
-        f"def encode_{label}({args}) -> bytes:\n"
-        f'    raise NotImplementedError("stub — set ANTHROPIC_API_KEY to generate this for real")\n\n\n'
+    )
+    if direction == "OUT":
+        return header + (
+            f"def encode_{label}({args}) -> bytes:\n"
+            f'    raise NotImplementedError("stub — set ANTHROPIC_API_KEY to generate this for real")\n'
+        )
+    return header + (
         f"def decode_{label}(data: bytes) -> dict:\n"
         f'    raise NotImplementedError("stub — set ANTHROPIC_API_KEY to generate this for real")\n'
     )
@@ -107,78 +125,76 @@ def reference_decode(sample_hex, deciphered_fields):
 
 
 def verify_generated_code(code, context):
-    """Runs the generated decode_<label>() against a real sample and compares
-    it to reference_decode(). Returns an error string describing the mismatch,
-    or None if it checks out."""
+    """Runs the generated function against a real sample and checks its
+    arithmetic against reference_decode() (ground truth, independent of
+    anything an LLM wrote). Returns an error string describing the mismatch,
+    or None if it checks out. Only the direction-appropriate function is
+    generated/checked — IN messages only ever get decode_<label>, OUT
+    messages only ever get encode_<label>."""
     if not context["sample_hex"]:
         return None
 
     label = context["label"]
+    direction = context["direction"]
     namespace = {}
     try:
         exec(code, namespace)  # noqa: S102 — trusted pipeline output, not user input
     except Exception as e:
         return f"generated code failed to execute: {e}"
 
-    decode_fn = namespace.get(f"decode_{label}")
-    if decode_fn is None:
-        return f"no decode_{label}() function found in the generated code"
-
     sample_hex = context["sample_hex"][0]
-    try:
-        actual = decode_fn(bytes.fromhex(sample_hex))
-    except Exception as e:
-        return f"decode_{label}() raised {e}"
-
-    if not isinstance(actual, dict):
-        return f"decode_{label}() returned {type(actual).__name__}, expected a dict"
-
     # Tolerance is tied to each field's own quantization granularity (1/scale
     # = real-world units per raw count), not a generic floor — a fixed floor
     # like 0.5 would swallow a multiply/divide inversion whole for any field
     # whose real values happen to sit under that floor (e.g. a 0-3.3V signal).
     field_by_param = {f["param"]: f for f in context["deciphered_fields"]}
-
     expected = reference_decode(sample_hex, context["deciphered_fields"])
-    for param, expected_value in expected.items():
-        actual_value = actual.get(param)
-        tolerance = max(1 / field_by_param[param]["scale"], 0.01)
-        if actual_value is None or abs(actual_value - expected_value) > tolerance:
-            return (
-                f'decode_{label}()["{param}"] returned {actual_value} for a real captured '
-                f"sample, but the ground truth (same start/end/byte_order/scale this context "
-                f"was built from) says it should be ~{expected_value:.4f} — likely a scale "
-                f"direction or endianness bug"
-            )
 
-    # Round-trip check: encode() then decode() should return ~ what went in.
-    # This exercises encode's arithmetic directly (decode alone never does,
-    # since it just divides whatever raw byte is already sitting in the
-    # sample) — a multiply/divide inversion in encode shows up here as a huge
-    # mismatch, not a rounding-convention nit.
+    if direction == "IN":
+        decode_fn = namespace.get(f"decode_{label}")
+        if decode_fn is None:
+            return f"no decode_{label}() function found in the generated code"
+        try:
+            actual = decode_fn(bytes.fromhex(sample_hex))
+        except Exception as e:
+            return f"decode_{label}() raised {e}"
+        if not isinstance(actual, dict):
+            return f"decode_{label}() returned {type(actual).__name__}, expected a dict"
+        for param, expected_value in expected.items():
+            actual_value = actual.get(param)
+            tolerance = max(1 / field_by_param[param]["scale"], 0.01)
+            if actual_value is None or abs(actual_value - expected_value) > tolerance:
+                return (
+                    f'decode_{label}()["{param}"] returned {actual_value} for a real captured '
+                    f"sample, but the ground truth (same start/end/byte_order/scale this context "
+                    f"was built from) says it should be ~{expected_value:.4f} — likely a scale "
+                    f"direction or endianness bug"
+                )
+        return None
+
+    # direction == "OUT": there's no generated decode_<label>() to round-trip
+    # through, so check encode_<label>()'s own output directly, byte range by
+    # byte range, against the ground-truth math.
     encode_fn = namespace.get(f"encode_{label}")
     if encode_fn is None:
         return f"no encode_{label}() function found in the generated code"
-
     try:
         encoded = encode_fn(**expected)
     except Exception as e:
         return f"encode_{label}(**{expected}) raised {e}"
+    if not isinstance(encoded, bytes):
+        return f"encode_{label}() returned {type(encoded).__name__}, expected bytes"
 
-    try:
-        roundtripped = decode_fn(encoded)
-    except Exception as e:
-        return f"decode_{label}() raised {e} when decoding encode_{label}()'s own output"
-
-    for param, original_value in expected.items():
-        roundtripped_value = roundtripped.get(param) if isinstance(roundtripped, dict) else None
+    for param, expected_value in expected.items():
+        f = field_by_param[param]
+        raw = int.from_bytes(encoded[f["start"]:f["end"] + 1], f["byte_order"])
+        actual_value = raw / f["scale"]
         # allow ~1.5 raw counts of rounding slack from encode's own quantization
-        tolerance = max(1.5 / field_by_param[param]["scale"], 0.01)
-        if roundtripped_value is None or abs(roundtripped_value - original_value) > tolerance:
+        tolerance = max(1.5 / f["scale"], 0.01)
+        if abs(actual_value - expected_value) > tolerance:
             return (
-                f'encode_{label}(**{expected}) then decode_{label}() round-tripped "{param}" to '
-                f"{roundtripped_value}, expected ~{original_value:.4f} — likely a scale direction "
-                f"bug in encode_{label}()"
+                f'encode_{label}(**{expected}) wrote "{param}" as {actual_value} (raw {raw}), '
+                f"expected ~{expected_value:.4f} — likely a scale direction bug"
             )
     return None
 

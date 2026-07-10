@@ -149,6 +149,37 @@ def save_monitors(monitors):
 # those are baked into the tshark command at launch.
 capture_state = {"thread": None, "process_holder": {}, "enabled": False, "running": False}
 
+MAX_CAPTURE_MESSAGES = 200
+
+
+def _trim_capture_log():
+    """Keeps the capture log bounded to the last MAX_CAPTURE_MESSAGES
+    messages, so a long-running live capture doesn't grow the file (and the
+    in-browser table) without limit. Counts against the same non-zero-length
+    filtering build_capture_view applies, since that's what "message index"
+    actually means everywhere else (labels.json is keyed by that index, not
+    raw file line number) — dropping the oldest ones re-indexes labels.json
+    to match, or drops labels whose message fell out of the buffer."""
+    if not os.path.exists(CAPTURE_FILE):
+        return
+    raw_records = list(load_capture_log(CAPTURE_FILE))
+    kept_positions = [i for i, r in enumerate(raw_records) if len(r[2]) > 0]
+    if len(kept_positions) <= MAX_CAPTURE_MESSAGES:
+        return
+
+    drop_count = len(kept_positions) - MAX_CAPTURE_MESSAGES
+    raw_cutoff = kept_positions[drop_count]  # first raw record to keep
+    with open(CAPTURE_FILE, "w") as f:
+        for timestamp, direction, data in raw_records[raw_cutoff:]:
+            f.write(json.dumps({"timestamp": timestamp, "direction": direction, "data_hex": data.hex()}) + "\n")
+
+    reindexed = {}
+    for key, label in load_labels().items():
+        new_index = int(key) - drop_count
+        if new_index >= 0:
+            reindexed[str(new_index)] = label
+    save_labels(reindexed)
+
 
 def _capture_loop(interface, device_address):
     capture_state["process_holder"] = {}
@@ -163,6 +194,7 @@ def _capture_loop(interface, device_address):
             # unlinked inode nothing can see
             with open(CAPTURE_FILE, "a") as f:
                 f.write(json.dumps(record) + "\n")
+            _trim_capture_log()
     finally:
         capture_state["running"] = False
 
@@ -302,7 +334,11 @@ def api_delete_label(index):
 @app.route("/api/find_value", methods=["POST"])
 def api_find_value():
     payload = request.get_json()
-    indices = payload["indices"]
+    # bytes come straight from the browser's own Analysis panel, not re-derived
+    # from a message index against the current capture log — a message's
+    # index isn't a stable identity once the capture buffer can trim/re-index
+    # older messages out from under an in-progress analysis
+    messages = [bytes.fromhex(h) for h in payload["messages_hex"]]
     expected_values = payload["expected_values"]
     tolerance = payload.get("tolerance", 0)
     scales = payload.get("scales")
@@ -312,12 +348,6 @@ def api_find_value():
         min_value = 0
     max_value = payload.get("max_value")
     byte_order = payload.get("byte_order")
-
-    if not os.path.exists(CAPTURE_FILE):
-        return jsonify({"matches": []})
-
-    records = list(load_capture_log(CAPTURE_FILE))
-    messages = [records[i][2] for i in indices]
 
     result = find_scaled_value(messages, expected_values, tolerance, scales, span, min_value, max_value, byte_order)
     return jsonify(result)
@@ -410,11 +440,20 @@ def api_generate_driver():
     if context is None:
         return jsonify({"error": f'no "{direction}" messages found'}), 400
 
-    code, is_mock = generate_driver_code(context)
+    try:
+        code, is_mock = generate_driver_code(context)
+    except Exception as e:
+        # without this, an exception here (missing dependency, network
+        # error, bad API key) returns Flask's HTML error page, which the
+        # frontend's res.json() then fails to parse — silently leaving the
+        # "Generating..." placeholder stuck forever with no visible error
+        return jsonify({"error": f"driver generation failed: {e}"}), 500
     return jsonify({"code": code, "mock": is_mock})
 
 
 if __name__ == "__main__":
     # use_reloader=False: the reloader restarts the whole process on file
     # changes, which would silently orphan the background capture thread
-    app.run(debug=True, port=5001, use_reloader=False)
+    # threaded=True: a slow/blocked driver-generation call (an LLM request)
+    # would otherwise stall every other request — capture polling included
+    app.run(debug=True, port=5001, use_reloader=False, threaded=True)
