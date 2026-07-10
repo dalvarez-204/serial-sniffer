@@ -63,6 +63,7 @@ async function loadData() {
     analysis: state.analysis,
     labels: state.labels,
     deciphered: state.deciphered,
+    monitors: state.monitors,
   });
   state = { ...state, ...fetched };
   if (!unchanged) render();
