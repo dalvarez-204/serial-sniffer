@@ -46,6 +46,10 @@ function colorForLabel(name) {
 let showFullTimestamp = false; // default: time only
 let showAscii = true;
 
+const MESSAGE_PAGE_SIZE = 25;
+let visibleMessageCount = MESSAGE_PAGE_SIZE; // grows as older history gets revealed by scrolling up
+let scrollSentinelObserver = null; // disconnected and replaced each render to avoid leaking one per render
+
 function formatTimestamp(epochSeconds) {
   const d = new Date(epochSeconds * 1000);
   const pad = (n, len = 2) => String(n).padStart(len, "0");
@@ -120,6 +124,9 @@ function getActiveMonitorsForMessage(msg) {
 
 function render() {
   const scrollY = window.scrollY;
+  const tableContainer = document.getElementById("capture-table");
+  const prevScrollTop = tableContainer.scrollTop;
+  const prevScrollHeight = tableContainer.scrollHeight;
   const previouslySelected = new Set(
     Array.from(document.querySelectorAll(".row-select:checked")).map((cb) => Number(cb.dataset.index))
   );
@@ -130,12 +137,22 @@ function render() {
     : "";
   document.getElementById("confidence-warnings").innerHTML = warningHtml;
 
+  // Only the most recent `visibleMessageCount` messages are ever in the DOM —
+  // matters once a live capture has piled up thousands of rows. Scrolling to
+  // the top of the pane reveals more (older) ones via the sentinel below.
+  const windowStart = Math.max(0, state.messages.length - visibleMessageCount);
+  const windowedMessages = state.messages.slice(windowStart);
+  const hiddenOlderCount = windowStart;
+
   const maxLen = Math.max(0, ...state.messages.map((m) => m.length));
-  let html = "<table><thead><tr><th></th><th>#</th><th>dir</th><th>t</th>";
+  const sentinelHtml = hiddenOlderCount > 0
+    ? `<div id="scroll-sentinel" class="hint">▲ scroll up for ${hiddenOlderCount} earlier message${hiddenOlderCount === 1 ? "" : "s"}</div>`
+    : "";
+  let html = sentinelHtml + "<table><thead><tr><th></th><th>#</th><th>dir</th><th>t</th>";
   for (let i = 0; i < maxLen; i++) html += `<th>${i}</th>`;
   html += `${showAscii ? "<th>ascii</th>" : ""}<th>label</th></tr></thead><tbody>`;
 
-  for (const msg of state.messages) {
+  for (const msg of windowedMessages) {
     const label = state.labels[msg.index];
     const monitors = getActiveMonitorsForMessage(msg);
     let isAnomaly = false;
@@ -179,9 +196,43 @@ function render() {
     html += "</tr>";
   }
   html += "</tbody></table>";
-  document.getElementById("capture-table").innerHTML = html;
+  tableContainer.innerHTML = html;
   renderLabelGroups();
   renderMonitorsPanel();
+
+  // Keep the pane's own scroll position stable across a re-render: if
+  // rendering just added height above the old scroll position (revealing
+  // older messages, or the very first render landing at the newest ones),
+  // shift scrollTop by the same delta so the view doesn't visually jump.
+  tableContainer.scrollTop = prevScrollTop + (tableContainer.scrollHeight - prevScrollHeight);
+
+  scrollSentinelObserver?.disconnect();
+  const sentinel = document.getElementById("scroll-sentinel");
+  if (sentinel) {
+    // IntersectionObserver reports the CURRENT state as soon as .observe()
+    // starts, not just future changes — if the pane isn't actually full
+    // enough to need scrolling, the sentinel would be trivially "visible"
+    // immediately and this would fire right away with no real scroll
+    // gesture, ballooning visibleMessageCount until all history loads. Skip
+    // that first, non-scroll-triggered callback; only act once the
+    // intersection state actually changes.
+    let isFirstCallback = true;
+    scrollSentinelObserver = new IntersectionObserver(
+      (entries) => {
+        if (isFirstCallback) {
+          isFirstCallback = false;
+          return;
+        }
+        if (entries[0].isIntersecting) {
+          scrollSentinelObserver.disconnect();
+          visibleMessageCount += MESSAGE_PAGE_SIZE;
+          render();
+        }
+      },
+      { root: tableContainer }
+    );
+    scrollSentinelObserver.observe(sentinel);
+  }
 
   document.querySelectorAll(".message-row").forEach((row) => {
     row.addEventListener("click", (e) => {
