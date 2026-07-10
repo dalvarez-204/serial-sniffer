@@ -35,6 +35,11 @@ th { color: #888; font-weight: normal; }
    dragging the whole page into a side-scroll */
 #capture-table, #analysis-messages { max-width: 100%; overflow-x: auto; }
 
+/* capped to roughly 25 rows tall — scroll within the box for the rest,
+   instead of the whole page growing with every captured message */
+#capture-table { max-height: 640px; overflow-y: auto; }
+#capture-table thead th { position: sticky; top: 0; background: #111; }
+
 tr.message-row { cursor: pointer; transition: opacity 0.15s; }
 tr.message-row:hover { background: #222; }
 tr.message-row.dimmed { opacity: 0.3; }
