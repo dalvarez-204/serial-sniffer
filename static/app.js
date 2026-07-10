@@ -1,3 +1,13 @@
+// Label/param names are free text the user types (label-name, decipher/watch
+// param name inputs) and get embedded into innerHTML strings all over this
+// file — escape them everywhere or a name like `x" onmouseover="alert(1)`
+// breaks out of an attribute and injects arbitrary markup/handlers.
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
 let state = { messages: [], analysis: {}, labels: {}, deciphered: {}, monitors: {}, activeIndex: null };
 let analysisSet = []; // [{index, hexBytes, ascii, expected: ""}]
 let lastMatches = [];
@@ -20,13 +30,16 @@ function monitorsFor(label, direction) {
   return Object.values(state.monitors).filter((m) => m.label === label && m.direction === direction);
 }
 
-function colorForLabel(name) {
+function hueForName(name) {
   let hash = 0;
   for (let i = 0; i < name.length; i++) {
     hash = name.charCodeAt(i) + ((hash << 5) - hash);
   }
-  const hue = Math.abs(hash) % 360;
-  return `hsl(${hue}, 65%, 60%)`;
+  return Math.abs(hash) % 360;
+}
+
+function colorForLabel(name) {
+  return `hsl(${hueForName(name)}, 65%, 60%)`;
 }
 
 let showFullTimestamp = false; // default: time only
@@ -143,26 +156,24 @@ function render() {
       let titleAttr = "";
       if (decipheredField) {
         cls += " deciphered";
-        titleAttr = ` title="${decipheredField.param}"`;
-        // a thin seam between adjacent-but-different named fields, since both
-        // would otherwise be the same gold glow with no visible boundary
+        titleAttr = ` title="${escapeHtml(decipheredField.param)}"`;
+        // a bold seam wherever the previous byte belongs to a different named
+        // field, so adjacent deciphered fields are clearly distinguishable
+        // even though they share the same gold styling
         const prevField = decipheredFields.find((entry) => i - 1 >= entry.start && i - 1 <= entry.end);
         if (!prevField || prevField.param !== decipheredField.param) cls += " deciphered-boundary";
       }
       if (monitors.some((m) => i >= m.start && i <= m.end)) cls += " monitored-byte";
       html += `<td class="byte ${cls}"${titleAttr}>${byte}</td>`;
     }
-    if (showAscii) html += `<td>${msg.ascii}</td>`;
+    if (showAscii) html += `<td>${escapeHtml(msg.ascii)}</td>`;
     const eyeIcon = monitors.length ? ` <span class="eye-icon" title="${isAnomaly ? "Anomaly detected!" : "Being monitored"}">${isAnomaly ? "👁⚠" : "👁"}</span>` : "";
     const labelHtml =
       label && label.name
-        ? `<span style="color: ${colorForLabel(label.name)}">● ${label.name}</span>`
+        ? `<span style="color: ${colorForLabel(label.name)}">● ${escapeHtml(label.name)}</span>`
         : "+ label";
-    const duplicateIcon = `<span class="row-action-icon duplicate-icon" data-index="${msg.index}" title="Duplicate: get a snippet that resends this exact message, no protocol knowledge needed">⧉</span>`;
-    const replicateIcon = decipheredFields.length
-      ? `<span class="row-action-icon replicate-icon" data-index="${msg.index}" title="Replicate: get a snippet that sends this command with different values">⇄</span>`
-      : "";
-    html += `<td class="label-cell">${labelHtml}${eyeIcon}${duplicateIcon}${replicateIcon}</td>`;
+    const replayIcon = `<span class="row-action-icon replay-icon" data-index="${msg.index}" title="Duplicate or replicate this message">⧉</span>`;
+    html += `<td class="label-cell">${labelHtml}${eyeIcon}${replayIcon}</td>`;
     html += "</tr>";
   }
   html += "</tbody></table>";
@@ -192,17 +203,10 @@ function render() {
     if (previouslySelected.has(Number(cb.dataset.index))) cb.checked = true;
   });
 
-  document.querySelectorAll(".duplicate-icon").forEach((el) => {
+  document.querySelectorAll(".replay-icon").forEach((el) => {
     el.addEventListener("click", (e) => {
       e.stopPropagation();
-      openDuplicatePanel(Number(el.dataset.index), el);
-    });
-  });
-
-  document.querySelectorAll(".replicate-icon").forEach((el) => {
-    el.addEventListener("click", (e) => {
-      e.stopPropagation();
-      openReplicatePanel(Number(el.dataset.index), el);
+      openReplayPanel(Number(el.dataset.index), el);
     });
   });
 
@@ -210,49 +214,78 @@ function render() {
   window.scrollTo(0, scrollY);
 }
 
-function openDuplicatePanel(index, anchorEl) {
+let replayContext = null; // {index, msg, label, fields} for whichever row's ⧉ was clicked
+
+function resetReplayContent() {
+  document.getElementById("replay-form").innerHTML = "";
+  document.getElementById("replay-snippet").textContent = "";
+  document.getElementById("replay-snippet").classList.add("hidden");
+  document.getElementById("replay-copy").classList.add("hidden");
+}
+
+function openReplayPanel(index, anchorEl) {
   const msg = state.messages.find((m) => m.index === index);
   if (!msg) return;
-  const hex = msg.hex_bytes.join("");
-  document.getElementById("replay-title").textContent = `Duplicate message #${index}`;
-  document.getElementById("replay-form").innerHTML =
-    '<p class="hint">Resends the exact captured bytes verbatim — no protocol knowledge needed.</p>';
-  document.getElementById("replay-snippet").textContent = `ser.write(bytes.fromhex("${hex}"))`;
+  const label = state.labels[index];
+  const fields = label && label.name ? decipheredFieldsFor(label.name, msg.direction) : [];
+  replayContext = { index, msg, label, fields };
+
+  document.getElementById("replay-title").textContent = `Send message #${index}`;
+  document.getElementById("replay-chooser").classList.remove("hidden");
+  resetReplayContent();
+
+  const replicateBtn = document.getElementById("replay-choose-replicate");
+  replicateBtn.disabled = fields.length === 0;
+  replicateBtn.title = fields.length === 0
+    ? "No deciphered fields yet for this label — Mark deciphered a match first"
+    : "Send this command with different values";
+
   positionPanelNear(document.getElementById("replay-panel"), anchorEl);
   document.getElementById("replay-panel").classList.remove("hidden");
 }
 
-function openReplicatePanel(index, anchorEl) {
-  const msg = state.messages.find((m) => m.index === index);
-  const label = state.labels[index];
-  if (!msg || !label || !label.name) return;
-  const fields = decipheredFieldsFor(label.name, msg.direction);
+document.getElementById("replay-choose-duplicate").addEventListener("click", () => {
+  const { index, msg } = replayContext;
+  const hex = msg.hex_bytes.join("");
+  document.getElementById("replay-title").textContent = `Duplicate message #${index}`;
+  document.getElementById("replay-chooser").classList.add("hidden");
+  document.getElementById("replay-form").innerHTML =
+    '<p class="hint">Resends the exact captured bytes verbatim — no protocol knowledge needed.</p>';
+  document.getElementById("replay-snippet").textContent = `ser.write(bytes.fromhex("${hex}"))`;
+  document.getElementById("replay-snippet").classList.remove("hidden");
+  document.getElementById("replay-copy").classList.remove("hidden");
+});
+
+document.getElementById("replay-choose-replicate").addEventListener("click", () => {
+  const { msg, label, fields } = replayContext;
   if (!fields.length) return;
 
   document.getElementById("replay-title").textContent = `Replicate "${label.name}" (${msg.direction})`;
+  document.getElementById("replay-chooser").classList.add("hidden");
   const formHtml = fields
-    .map((f) => `<label>${f.param} <input class="replicate-param-input" data-param="${f.param}" type="text" placeholder="new value"></label>`)
+    .map((f) => `<label>${escapeHtml(f.param)} <input class="replicate-param-input" data-param="${escapeHtml(f.param)}" type="text" placeholder="new value"></label>`)
     .join("");
   document.getElementById("replay-form").innerHTML =
-    `<p class="hint">Sends the same command with different values — requires the generated <code>encode_${label.name}()</code> driver function (use "Generate driver function" on this label group first).</p>${formHtml}`;
+    `<p class="hint">Sends the same command with different values — requires the generated <code>encode_${escapeHtml(label.name)}()</code> driver function (use "Generate driver function" on this label group first).</p>${formHtml}`;
 
+  const paramInputs = Array.from(document.querySelectorAll(".replicate-param-input"));
   const updateSnippet = () => {
     const args = fields
       .map((f) => {
-        const input = document.querySelector(`.replicate-param-input[data-param="${f.param}"]`);
+        const input = paramInputs.find((el) => el.dataset.param === f.param);
         return `${f.param}=${input.value || 0}`;
       })
       .join(", ");
     document.getElementById("replay-snippet").textContent = `ser.write(encode_${label.name}(${args}))`;
   };
-  document.querySelectorAll(".replicate-param-input").forEach((input) => input.addEventListener("input", updateSnippet));
+  paramInputs.forEach((input) => input.addEventListener("input", updateSnippet));
   updateSnippet();
-
-  positionPanelNear(document.getElementById("replay-panel"), anchorEl);
-  document.getElementById("replay-panel").classList.remove("hidden");
-}
+  document.getElementById("replay-snippet").classList.remove("hidden");
+  document.getElementById("replay-copy").classList.remove("hidden");
+});
 
 document.getElementById("replay-close").addEventListener("click", () => {
+  replayContext = null;
   document.getElementById("replay-panel").classList.add("hidden");
 });
 
@@ -534,8 +567,8 @@ function renderAnalysisPanel() {
       const titleAttr = highlighted ? ' title="Right-click to compare this span"' : "";
       html += `<td class="byte analysis-byte ${cls}" data-offset="${i}"${titleAttr}>${byte}</td>`;
     }
-    if (showAscii) html += `<td>${msg.ascii}</td>`;
-    html += `<td><input type="text" class="expected-input" data-row="${row}" value="${msg.expected}" placeholder="e.g. 5.0"></td>`;
+    if (showAscii) html += `<td>${escapeHtml(msg.ascii)}</td>`;
+    html += `<td><input type="text" class="expected-input" data-row="${row}" value="${escapeHtml(msg.expected)}" placeholder="e.g. 5.0"></td>`;
     html += "</tr>";
   });
   html += "</tbody></table>";
@@ -794,7 +827,7 @@ function renderMatchResults() {
               const avgDecoded = m.decoded_values.reduce((a, b) => a + b, 0) / m.decoded_values.length;
               const actionsHtml = analysisContext
                 ? `<div class="match-actions">
-                     <button class="save-deciphered-btn" data-start="${m.start}" data-end="${m.end}" data-order="${m.byte_order}" data-scale="${m.scale}" title='Mark deciphered for "${analysisContext.label}" (${analysisContext.direction})'>Mark deciphered</button>
+                     <button class="save-deciphered-btn" data-start="${m.start}" data-end="${m.end}" data-order="${m.byte_order}" data-scale="${m.scale}" title='Mark deciphered for "${escapeHtml(analysisContext.label)}" (${analysisContext.direction})'>Mark deciphered</button>
                      <button class="watch-btn" data-start="${m.start}" data-end="${m.end}" data-order="${m.byte_order}" data-scale="${m.scale}" data-precision="${m.precision ?? ""}" data-avg-decoded="${avgDecoded}">👁 Watch</button>
                    </div>`
                 : "";
@@ -984,11 +1017,11 @@ function renderMonitorsPanel() {
     const deciphered = state.deciphered[key];
     const decipherHtml = deciphered
       ? ` <span class="deciphered-note">deciphered: bytes [${deciphered.start}-${deciphered.end}], ${deciphered.byte_order}-endian, scale ${deciphered.scale}</span>`
-      : ` <button class="mark-deciphered-from-monitor-btn" data-key="${key}">Mark deciphered</button>`;
+      : ` <button class="mark-deciphered-from-monitor-btn" data-key="${escapeHtml(key)}">Mark deciphered</button>`;
     html += `<li>
-      <strong>${monitor.label}</strong> (${monitor.direction}) — param "${monitor.param}", bytes [${monitor.start}-${monitor.end}], ${monitor.byte_order}-endian, scale ${formatScale(monitor.scale)}${precisionNote} —
+      <strong>${escapeHtml(monitor.label)}</strong> (${monitor.direction}) — param "${escapeHtml(monitor.param)}", bytes [${monitor.start}-${monitor.end}], ${monitor.byte_order}-endian, scale ${formatScale(monitor.scale)}${precisionNote} —
       tolerance ± ${monitor.tolerance}: ${statusHtml}
-      <button class="stop-watch-btn" data-label="${monitor.label}" data-direction="${monitor.direction}" data-param="${monitor.param}">Stop watching</button>${decipherHtml}
+      <button class="stop-watch-btn" data-label="${escapeHtml(monitor.label)}" data-direction="${monitor.direction}" data-param="${escapeHtml(monitor.param)}">Stop watching</button>${decipherHtml}
     </li>`;
   }
   html += "</ul>";
@@ -1059,14 +1092,14 @@ function renderLabelGroups() {
     const decipheredFields = decipheredFieldsFor(group.name, group.direction);
     const decipheredNote = decipheredFields.length
       ? ` — <span class="deciphered-note">deciphered: ${decipheredFields
-          .map((d) => `${d.param} (bytes [${d.start}-${d.end}], ${d.byte_order}-endian, scale ${formatScale(d.scale)})`)
+          .map((d) => `${escapeHtml(d.param)} (bytes [${d.start}-${d.end}], ${d.byte_order}-endian, scale ${formatScale(d.scale)})`)
           .join(", ")}</span>`
       : "";
 
     html += `<li>
-      <strong>${group.name}</strong> (${group.direction}, ${group.members.length} labeled, ${withValues.length} with a value, ${distinctValues} distinct)${decipheredNote}
-      <button class="analyze-group-btn" data-key="${key}" ${distinctValues < 2 ? "disabled" : ""}>Analyze</button>
-      <button class="generate-driver-btn" data-label="${group.name}" data-direction="${group.direction}" ${decipheredFields.length ? "" : "disabled"} title="${decipheredFields.length ? "" : "Mark deciphered first"}">Generate driver function</button>
+      <strong>${escapeHtml(group.name)}</strong> (${group.direction}, ${group.members.length} labeled, ${withValues.length} with a value, ${distinctValues} distinct)${decipheredNote}
+      <button class="analyze-group-btn" data-key="${escapeHtml(key)}" ${distinctValues < 2 ? "disabled" : ""}>Analyze</button>
+      <button class="generate-driver-btn" data-label="${escapeHtml(group.name)}" data-direction="${group.direction}" ${decipheredFields.length ? "" : "disabled"} title="${decipheredFields.length ? "" : "Mark deciphered first"}">Generate driver function</button>
     </li>`;
   }
   html += "</ul>";
@@ -1197,6 +1230,25 @@ document.getElementById("scan-lsusb").addEventListener("click", async () => {
   const res = await fetch("/api/lsusb");
   const { output } = await res.json();
   box.textContent = output;
+});
+
+document.getElementById("detect-line-coding").addEventListener("click", async () => {
+  const status = document.getElementById("line-coding-status");
+  status.textContent = "Waiting for a SET_LINE_CODING request (up to 15s) — reconnect the device's original control software now...";
+  const interfaceValue = document.getElementById("capture-interface").value.trim() || "usbmon3";
+  const deviceValue = Number(document.getElementById("capture-device").value) || 2;
+  const res = await fetch("/api/detect_line_coding", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ interface: interfaceValue, device_address: deviceValue }),
+  });
+  const result = await res.json();
+  if (!result.ok) {
+    status.textContent = result.error;
+    return;
+  }
+  const s = result.settings;
+  status.textContent = `Detected: baudrate=${s.baudrate}, bytesize=${s.bytesize}, parity=${s.parity}, stopbits=${s.stopbits}`;
 });
 
 document.getElementById("capture-settings-toggle").addEventListener("click", () => {

@@ -25,8 +25,10 @@
       <span id="capture-config-saved" class="hidden">Saved!</span>
       <button id="toggle-capture">Connect</button>
       <button id="scan-lsusb">Scan USB devices (lsusb)</button>
+      <button id="detect-line-coding" title="Watches for the SET_LINE_CODING control transfer the host sends when opening the port — reconnect the device's original control software while this runs to catch it.">Detect serial settings</button>
     </div>
     <p id="capture-status" class="hint"></p>
+    <p id="line-coding-status" class="hint"></p>
     <pre id="lsusb-output" class="hidden"></pre>
   </div>
 
@@ -130,10 +132,14 @@
   </div>
 
   <div id="replay-panel" class="modal-panel hidden">
-    <h2 id="replay-title">Duplicate message</h2>
+    <h2 id="replay-title">Send this message</h2>
+    <div id="replay-chooser">
+      <button id="replay-choose-duplicate" title="Resend the exact captured bytes — no protocol knowledge needed">⧉ Duplicate</button>
+      <button id="replay-choose-replicate" title="Send this command with different values">⇄ Replicate</button>
+    </div>
     <div id="replay-form"></div>
-    <pre id="replay-snippet"></pre>
-    <button id="replay-copy">Copy to clipboard</button>
+    <pre id="replay-snippet" class="hidden"></pre>
+    <button id="replay-copy" class="hidden">Copy to clipboard</button>
     <button id="replay-close">Close</button>
   </div>
 

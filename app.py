@@ -8,6 +8,7 @@ import threading
 
 from first import load_capture_log, analyze_byte_variability, find_checksum_range, find_scaled_value, stream_usb_capture
 from codegen import build_codegen_context, generate_driver_code
+from line_coding import capture_line_coding
 
 load_dotenv()
 
@@ -49,6 +50,10 @@ def build_capture_view(filepath):
         return _capture_cache["messages"], _capture_cache["analysis"]
 
     records = list(load_capture_log(filepath))
+    # tshark can emit a record with usb.data_len > 0 but no actual capdata
+    # (e.g. some control transfers) — those decode to zero-length messages
+    # that have nothing to show or analyze, so drop them before indexing
+    records = [r for r in records if len(r[2]) > 0]
 
     groups = {}
     for _, direction, data in records:
@@ -267,6 +272,23 @@ def api_lsusb():
         return jsonify({"output": "lsusb not found on this machine."})
     except subprocess.TimeoutExpired:
         return jsonify({"output": "lsusb timed out."})
+
+
+@app.route("/api/detect_line_coding", methods=["POST"])
+def api_detect_line_coding():
+    config = load_capture_config()
+    payload = request.get_json(silent=True) or {}
+    interface = payload.get("interface") or config["interface"]
+    device_address = int(payload.get("device_address") or config["device_address"])
+
+    settings = capture_line_coding(interface, device_address, timeout=15.0)
+    if settings is None:
+        return jsonify({
+            "ok": False,
+            "error": "No SET_LINE_CODING request seen in 15s — reconnect (or re-run) the device's "
+                     "original control software while this is running, then try again.",
+        })
+    return jsonify({"ok": True, "settings": settings})
 
 
 @app.route("/api/label/<int:index>", methods=["DELETE"])
