@@ -1191,7 +1191,20 @@ function renderLabelGroups() {
     return;
   }
 
-  let html = "<h2>Label groups</h2><ul>";
+  // the filter <select> lives inside this dynamically-regenerated HTML (it
+  // only makes sense to show while there's at least one group), so its
+  // chosen value has to be captured before the rewrite and restored after
+  const previousFilter = document.getElementById("label-group-filter")?.value || "";
+
+  let html = `<h2>Label groups</h2>
+    <label>Show
+      <select id="label-group-filter">
+        <option value="">All</option>
+        <option value="deciphered">Deciphered</option>
+        <option value="not-deciphered">Not deciphered</option>
+      </select>
+    </label>
+    <ul>`;
   for (const key of keys) {
     const group = groups[key];
     const withValues = group.members.filter((m) => m.value !== null);
@@ -1202,6 +1215,9 @@ function renderLabelGroups() {
     // — they just aren't named up front here. Naming happens per-match when
     // you Mark deciphered or Watch, so this just lists what's been named so far.
     const decipheredFields = decipheredFieldsFor(group.name, group.direction);
+    if (previousFilter === "deciphered" && decipheredFields.length === 0) continue;
+    if (previousFilter === "not-deciphered" && decipheredFields.length > 0) continue;
+
     const decipheredNote = decipheredFields.length
       ? ` — <span class="deciphered-note">deciphered: ${decipheredFields
           .map((d) => `${escapeHtml(d.param)} (bytes [${d.start}-${d.end}], ${d.byte_order}-endian, scale ${formatScale(d.scale)})`)
@@ -1223,6 +1239,8 @@ function renderLabelGroups() {
   }
   html += "</ul>";
   container.innerHTML = html;
+  document.getElementById("label-group-filter").value = previousFilter;
+  document.getElementById("label-group-filter").addEventListener("change", renderLabelGroups);
 
   document.querySelectorAll(".analyze-group-btn").forEach((btn) => {
     btn.addEventListener("click", () => analyzeLabelGroup(groups[btn.dataset.key]));
