@@ -1384,6 +1384,20 @@ async function checkCaptureStatus() {
 
 document.getElementById("toggle-capture").addEventListener("click", async () => {
   const enabling = !captureEnabled;
+  if (enabling) {
+    // apply whatever's currently typed immediately, rather than depending
+    // on the debounced auto-save (600ms after the last keystroke) having
+    // already fired — otherwise enabling right after typing would silently
+    // start capture on stale interface/device settings
+    clearTimeout(captureConfigSaveTimeout);
+    const interfaceValue = document.getElementById("capture-interface").value.trim() || "usbmon3";
+    const deviceValue = Number(document.getElementById("capture-device").value) || 2;
+    await fetch("/api/capture_config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ interface: interfaceValue, device_address: deviceValue }),
+    });
+  }
   await fetch(`/api/capture/${enabling ? "enable" : "disable"}`, { method: "POST" });
   setPollingInterval(enabling);
   checkCaptureStatus();
