@@ -131,9 +131,22 @@ function render() {
   );
 
   const directionFilter = document.getElementById("direction-filter").value;
-  const filteredMessages = directionFilter
+  let filteredMessages = directionFilter
     ? state.messages.filter((m) => m.direction === directionFilter)
     : state.messages;
+
+  if (document.getElementById("sort-by").value === "label") {
+    // unlabeled messages sort after every labeled one, in their original
+    // capture order relative to each other (Array.sort is stable)
+    filteredMessages = [...filteredMessages].sort((a, b) => {
+      const nameA = state.labels[a.index]?.name || "";
+      const nameB = state.labels[b.index]?.name || "";
+      if (!nameA && !nameB) return 0;
+      if (!nameA) return 1;
+      if (!nameB) return -1;
+      return nameA.localeCompare(nameB);
+    });
+  }
 
   // Only warn about groups that actually have a message in view right now —
   // otherwise switching to "OUT only" still shows warnings about IN groups
@@ -210,8 +223,11 @@ function render() {
       label && label.name
         ? `<span style="color: ${colorForLabel(label.name)}">● ${escapeHtml(label.name)}</span>`
         : "+ label";
+    const removeLabelIcon = label && label.name
+      ? `<span class="row-action-icon remove-label-icon" data-index="${msg.index}" title="Remove this label">×</span>`
+      : "";
     const replayIcon = `<span class="row-action-icon replay-icon" data-index="${msg.index}" title="Duplicate or replicate this message">⧉</span>`;
-    html += `<td class="label-cell">${labelHtml}${eyeIcon}${replayIcon}</td>`;
+    html += `<td class="label-cell">${labelHtml}${eyeIcon}${removeLabelIcon}${replayIcon}</td>`;
     html += "</tr>";
   }
   html += "</tbody></table>";
@@ -245,6 +261,14 @@ function render() {
     el.addEventListener("click", (e) => {
       e.stopPropagation();
       openReplayPanel(Number(el.dataset.index), el);
+    });
+  });
+
+  document.querySelectorAll(".remove-label-icon").forEach((el) => {
+    el.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      await removeLabel(Number(el.dataset.index));
+      render();
     });
   });
 
@@ -387,6 +411,10 @@ document.addEventListener("keydown", (e) => {
 });
 
 function openLabelPanel(index) {
+  // clicking in to inspect/label one specific measurement stops live
+  // capture — otherwise the message you're looking at can keep moving
+  // underneath you (new readings streaming in) while you're trying to name it
+  disableCapture();
   state.activeIndex = index;
   const label = state.labels[index] || { name: "", note: "", value: "" };
   document.getElementById("label-index").textContent = index;
@@ -500,10 +528,13 @@ document.getElementById("label-save").addEventListener("click", async () => {
   render();
 });
 
-document.getElementById("label-remove").addEventListener("click", async () => {
-  const index = state.activeIndex;
+async function removeLabel(index) {
   await fetch(`/api/label/${index}`, { method: "DELETE" });
   delete state.labels[index];
+}
+
+document.getElementById("label-remove").addEventListener("click", async () => {
+  await removeLabel(state.activeIndex);
   document.getElementById("label-panel").classList.add("hidden");
   render();
 });
@@ -1174,11 +1205,17 @@ function renderLabelGroups() {
           .join(", ")}</span>`
       : "";
 
-    html += `<li>
-      <strong>${escapeHtml(group.name)}</strong> (${group.direction}, ${group.members.length} labeled, ${withValues.length} with a value, ${distinctValues} distinct)${decipheredNote}
+    const summaryLine = `<strong>${escapeHtml(group.name)}</strong> (${group.direction}, ${group.members.length} labeled, ${withValues.length} with a value, ${distinctValues} distinct)${decipheredNote}`;
+    const actionButtons = `
       <button class="analyze-group-btn" data-key="${escapeHtml(key)}" ${distinctValues < 2 ? "disabled" : ""}>Analyze</button>
-      <button class="generate-driver-btn" data-label="${escapeHtml(group.name)}" data-direction="${group.direction}" ${decipheredFields.length ? "" : "disabled"} title="${decipheredFields.length ? "" : "Mark deciphered first"}">Generate driver function</button>
-    </li>`;
+      <button class="generate-driver-btn" data-label="${escapeHtml(group.name)}" data-direction="${group.direction}" ${decipheredFields.length ? "" : "disabled"} title="${decipheredFields.length ? "" : "Mark deciphered first"}">Generate driver function</button>`;
+
+    // every group stays in the list — a fully deciphered one just collapses
+    // down to its one-line summary so the panel doesn't keep growing as you
+    // finish more labels, without losing track of what's already been solved
+    html += decipheredFields.length
+      ? `<li><details class="label-group-details"><summary>${summaryLine}</summary>${actionButtons}</details></li>`
+      : `<li>${summaryLine}${actionButtons}</li>`;
   }
   html += "</ul>";
   container.innerHTML = html;
@@ -1346,6 +1383,7 @@ document.getElementById("toggle-deciphered-values").addEventListener("click", ()
 });
 
 document.getElementById("direction-filter").addEventListener("change", render);
+document.getElementById("sort-by").addEventListener("change", render);
 
 async function loadCaptureConfig() {
   const res = await fetch("/api/capture_config");
@@ -1427,6 +1465,13 @@ async function checkCaptureStatus() {
     statusEl.textContent = `Capture thread: ${status.running ? "running" : "not running"}, writing: ${captureEnabled ? "on" : "off"}`;
     statusEl.className = "hint";
   }
+}
+
+async function disableCapture() {
+  if (!captureEnabled) return;
+  await fetch("/api/capture/disable", { method: "POST" });
+  setPollingInterval(false);
+  checkCaptureStatus();
 }
 
 document.getElementById("toggle-capture").addEventListener("click", async () => {

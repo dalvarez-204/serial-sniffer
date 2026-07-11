@@ -156,31 +156,36 @@ MAX_CAPTURE_MESSAGES = 300
 
 def _trim_capture_log():
     """Keeps the capture log bounded to the last MAX_CAPTURE_MESSAGES
-    messages, so a long-running live capture doesn't grow the file (and the
-    in-browser table) without limit. Each record's "seq" (see
-    load_capture_log) is its permanent identity, so trimming the oldest ones
-    off never changes what any surviving message is called — no
-    re-indexing needed, just drop labels whose message fell out of the
-    buffer."""
+    UNLABELED messages, so a long-running live capture doesn't grow the file
+    (and the in-browser table) without limit — but a labeled message is
+    never dropped, no matter how old, since it represents solved/important
+    work. Each record's "seq" (see load_capture_log) is its permanent
+    identity, so trimming never changes what any surviving message is
+    called. Since only unlabeled messages are ever dropped, there's nothing
+    to prune from labels.json — a dropped message never had a label."""
     if not os.path.exists(CAPTURE_FILE):
         return
     raw_records = list(load_capture_log(CAPTURE_FILE))
-    kept_positions = [i for i, r in enumerate(raw_records) if len(r[3]) > 0]
-    if len(kept_positions) <= MAX_CAPTURE_MESSAGES:
+    filtered = [r for r in raw_records if len(r[3]) > 0]
+    if len(filtered) <= MAX_CAPTURE_MESSAGES:
         return
 
-    drop_count = len(kept_positions) - MAX_CAPTURE_MESSAGES
-    raw_cutoff = kept_positions[drop_count]  # first raw record to keep
-    kept_records = raw_records[raw_cutoff:]
-    with open(CAPTURE_FILE, "w") as f:
-        for seq, timestamp, direction, data in kept_records:
-            f.write(json.dumps({"seq": seq, "timestamp": timestamp, "direction": direction, "data_hex": data.hex()}) + "\n")
-
-    surviving_seqs = {seq for seq, _, _, data in kept_records if len(data) > 0}
     labels = load_labels()
-    pruned = {key: label for key, label in labels.items() if int(key) in surviving_seqs}
-    if len(pruned) != len(labels):
-        save_labels(pruned)
+
+    def is_labeled(record):
+        return bool(labels.get(str(record[0]), {}).get("name"))
+
+    recent = filtered[-MAX_CAPTURE_MESSAGES:]
+    older = filtered[:-MAX_CAPTURE_MESSAGES]
+    protected_older = [r for r in older if is_labeled(r)]
+    dropped = [r for r in older if not is_labeled(r)]
+    if not dropped:
+        return  # every older message is labeled — nothing left to trim
+
+    kept = sorted(protected_older + recent, key=lambda r: r[0])
+    with open(CAPTURE_FILE, "w") as f:
+        for seq, timestamp, direction, data in kept:
+            f.write(json.dumps({"seq": seq, "timestamp": timestamp, "direction": direction, "data_hex": data.hex()}) + "\n")
 
 
 def _next_capture_seq():

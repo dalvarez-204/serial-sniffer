@@ -323,6 +323,9 @@ td.byte.deciphered-value {
 }
 .closest-miss-detail { margin-top: 0.5rem; font-size: 0.85rem; }
 
+.label-group-details summary { cursor: pointer; }
+.label-group-details[open] summary { margin-bottom: 0.4rem; }
+
 .info-icon {
   display: inline-flex;
   align-items: center;
@@ -343,6 +346,7 @@ td.byte.monitored-byte { outline: 1px dashed #4dd0e1; }
 
 .row-action-icon { cursor: pointer; margin-left: 0.3rem; color: #888; }
 .row-action-icon:hover { color: #eee; }
+.remove-label-icon:hover { color: #ff6b6b; }
 
 #replay-chooser { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; }
 #replay-chooser button { flex: 1; padding: 0.6rem; font-weight: 700; }
