@@ -45,6 +45,7 @@ function colorForLabel(name) {
 
 let showFullTimestamp = false; // default: time only
 let showAscii = true;
+let showDecipheredValues = false;
 
 function formatTimestamp(epochSeconds) {
   const d = new Date(epochSeconds * 1000);
@@ -167,11 +168,28 @@ function render() {
     html += `<td>${msg.index}</td>`;
     html += `<td class="direction-${msg.direction}">${msg.direction}</td>`;
     html += `<td>${formatTimestamp(msg.timestamp)}</td>`;
-    for (let i = 0; i < maxLen; i++) {
+    for (let i = 0; i < maxLen; ) {
       const byte = msg.hex_bytes[i];
-      if (byte === undefined) { html += "<td></td>"; continue; }
-      let cls = byteClass(msg.group_key, i, state.analysis);
+      if (byte === undefined) { html += "<td></td>"; i++; continue; }
       const decipheredField = decipheredFields.find((entry) => i >= entry.start && i <= entry.end);
+
+      // collapse the whole field's byte range into one cell showing its
+      // decoded real-world value, instead of the raw hex — only once, at
+      // the field's first byte, and only if the message actually has every
+      // byte the field spans (a shorter message under the same label skips
+      // this and falls through to normal per-byte rendering below)
+      if (
+        showDecipheredValues && decipheredField &&
+        i === decipheredField.start && msg.hex_bytes[decipheredField.end] !== undefined
+      ) {
+        const width = decipheredField.end - decipheredField.start + 1;
+        const decodedValue = decodeHexSpan(msg.hex_bytes, decipheredField.start, decipheredField.end, decipheredField.byte_order) / decipheredField.scale;
+        html += `<td class="byte deciphered-value" colspan="${width}" title="${escapeHtml(decipheredField.param)}">${decodedValue.toFixed(3)}</td>`;
+        i = decipheredField.end + 1;
+        continue;
+      }
+
+      let cls = byteClass(msg.group_key, i, state.analysis);
       let titleAttr = "";
       if (decipheredField) {
         cls += " deciphered";
@@ -184,6 +202,7 @@ function render() {
       }
       if (monitors.some((m) => i >= m.start && i <= m.end)) cls += " monitored-byte";
       html += `<td class="byte ${cls}"${titleAttr}>${byte}</td>`;
+      i++;
     }
     if (showAscii) html += `<td>${escapeHtml(msg.ascii)}</td>`;
     const eyeIcon = monitors.length ? ` <span class="eye-icon" title="${isAnomaly ? "Anomaly detected!" : "Being monitored"}">${isAnomaly ? "👁⚠" : "👁"}</span>` : "";
@@ -351,6 +370,20 @@ document.addEventListener("click", (e) => {
       panel.classList.add("hidden");
     }
   });
+});
+
+// spacebar toggles capture — but only when focus isn't inside a text field,
+// otherwise typing a literal space anywhere (a label note, a value input)
+// would toggle capture instead of typing a space character
+document.addEventListener("keydown", (e) => {
+  if (e.code !== "Space") return;
+  const active = document.activeElement;
+  const isTyping = active && (
+    active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT" || active.isContentEditable
+  );
+  if (isTyping) return;
+  e.preventDefault(); // space's default action is scrolling the page
+  document.getElementById("toggle-capture").click();
 });
 
 function openLabelPanel(index) {
@@ -1255,6 +1288,13 @@ document.getElementById("toggle-full-timestamp").addEventListener("change", (e) 
 
 document.getElementById("toggle-ascii").addEventListener("change", (e) => {
   showAscii = e.target.checked;
+  render();
+});
+
+document.getElementById("toggle-deciphered-values").addEventListener("click", () => {
+  showDecipheredValues = !showDecipheredValues;
+  document.getElementById("toggle-deciphered-values").textContent = showDecipheredValues ? "Hide deciphered" : "Show deciphered";
+  document.getElementById("toggle-deciphered-values").classList.toggle("active", showDecipheredValues);
   render();
 });
 

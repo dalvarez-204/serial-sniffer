@@ -11,7 +11,14 @@ h1 { margin-bottom: 0.25rem; }
 .hint { color: #999; margin-bottom: 1rem; }
 .error-text { color: #ff6b6b; }
 
-.legend { padding: 0.1rem 0.4rem; border-radius: 4px; margin-right: 0.5rem; font-size: 0.85rem; }
+.legend {
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  margin-right: 0.5rem;
+  font-size: 0.85rem;
+  color: #fff;
+  text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
+}
 .legend.constant { background: #555; }
 .legend.checksum { background: #a15c00; }
 .legend.data { background: #1a5c1a; }
@@ -239,6 +246,17 @@ td.byte.deciphered { box-shadow: 0 0 8px 2px rgba(255, 215, 0, 0.85) inset; outl
 td.byte.deciphered.data { background: #2a2308; }
 td.byte.deciphered.deciphered-boundary {
   box-shadow: 0 0 8px 2px rgba(255, 215, 0, 0.85) inset, inset 5px 0 0 0 #fff;
+}
+
+/* stands apart from every other byte styling on purpose — this cell isn't
+   a raw byte anymore, it's the field's actual decoded value */
+td.byte.deciphered-value {
+  background: #000;
+  color: #fff;
+  border: 2px solid #fff;
+  font-weight: 700;
+  text-align: center;
+  cursor: help;
 }
 
 #driver-panel {

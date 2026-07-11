@@ -9,6 +9,7 @@ sniff live via usbmon, instead of fabricated capture_log.jsonl records.
 Requires: pip install pyserial
 """
 
+import collections
 import queue
 import sys
 import threading
@@ -16,6 +17,10 @@ import time
 import tkinter as tk
 
 import serial
+
+GRAPH_WIDTH = 440
+GRAPH_HEIGHT = 160
+GRAPH_HISTORY_LEN = 100
 
 PORT = "/dev/ttyACM0"
 BAUD = 115200
@@ -74,6 +79,14 @@ class PsuGui:
         self.reading_label = tk.Label(root, text="Reading: --", font=("Courier", 14))
         self.reading_label.grid(row=3, column=0, columnspan=3, padx=8, pady=8)
 
+        # rolling window of recent readings, each series scaled to the
+        # canvas independently since voltage (0-30V) and current (0-5A)
+        # don't share a sensible y-axis
+        self.voltage_history = collections.deque(maxlen=GRAPH_HISTORY_LEN)
+        self.current_history = collections.deque(maxlen=GRAPH_HISTORY_LEN)
+        self.graph = tk.Canvas(root, width=GRAPH_WIDTH, height=GRAPH_HEIGHT, bg="black")
+        self.graph.grid(row=4, column=0, columnspan=3, padx=8, pady=8)
+
         self.stop_event = threading.Event()
         threading.Thread(target=self.read_loop, daemon=True).start()
         self.root.after(100, self.poll_readings)
@@ -127,13 +140,40 @@ class PsuGui:
                 buf.clear()
 
     def poll_readings(self):
+        updated = False
         try:
             while True:
                 voltage, current = self.readings.get_nowait()
                 self.reading_label.config(text=f"Reading: {voltage:.3f} V, {current:.3f} A")
+                self.voltage_history.append(voltage)
+                self.current_history.append(current)
+                updated = True
         except queue.Empty:
             pass
+        if updated:
+            self._draw_graph()
         self.root.after(100, self.poll_readings)
+
+    def _draw_graph(self):
+        self.graph.delete("all")
+        self._draw_series(self.voltage_history, "#4a9eff")
+        self._draw_series(self.current_history, "#ffa500")
+        self.graph.create_text(8, 8, anchor="nw", text="voltage", fill="#4a9eff", font=("Courier", 9))
+        self.graph.create_text(8, 22, anchor="nw", text="current", fill="#ffa500", font=("Courier", 9))
+
+    def _draw_series(self, history, color):
+        if len(history) < 2:
+            return
+        lo, hi = min(history), max(history)
+        span = hi - lo or 1.0  # a flat line shouldn't divide by zero
+        margin = 5
+        step = GRAPH_WIDTH / (len(history) - 1)
+        points = []
+        for i, value in enumerate(history):
+            x = i * step
+            y = GRAPH_HEIGHT - margin - ((value - lo) / span) * (GRAPH_HEIGHT - 2 * margin)
+            points.extend([x, y])
+        self.graph.create_line(*points, fill=color, width=2)
 
     def on_close(self):
         self.stop_event.set()
