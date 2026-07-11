@@ -47,6 +47,20 @@ let showFullTimestamp = false; // default: time only
 let showAscii = true;
 let showDecipheredValues = false;
 
+let pigSniffTimeout = null;
+
+function playPigSniffAnimation() {
+  const pig = document.getElementById("pig-sniff");
+  pig.classList.remove("hidden", "sniffing");
+  void pig.offsetWidth; // force reflow so the animation restarts if triggered again mid-run
+  pig.classList.add("sniffing");
+  clearTimeout(pigSniffTimeout);
+  pigSniffTimeout = setTimeout(() => {
+    pig.classList.add("hidden");
+    pig.classList.remove("sniffing");
+  }, 1800);
+}
+
 function formatTimestamp(epochSeconds) {
   const d = new Date(epochSeconds * 1000);
   const pad = (n, len = 2) => String(n).padStart(len, "0");
@@ -640,6 +654,10 @@ function spanSelectClass(offset) {
 }
 
 function renderAnalysisPanel() {
+  document.getElementById("analysis-context-label").innerHTML = analysisContext
+    ? `— <strong>${escapeHtml(analysisContext.label)}</strong> (${analysisContext.direction})`
+    : "";
+
   const maxLen = Math.max(0, ...analysisSet.map((m) => m.hexBytes.length));
   let html = "<table><thead><tr><th>#</th>";
   for (let i = 0; i < maxLen; i++) html += `<th>${i}</th>`;
@@ -1086,6 +1104,7 @@ document.getElementById("decipher-name-save").addEventListener("click", async ()
   });
   pendingDecipher = null;
   document.getElementById("decipher-name-panel").classList.add("hidden");
+  playPigSniffAnimation();
   await loadData();
 });
 
@@ -1166,6 +1185,7 @@ function renderMonitorsPanel() {
           scale: monitor.scale,
         }),
       });
+      playPigSniffAnimation();
       await loadData();
     });
   });
@@ -1196,16 +1216,7 @@ function renderLabelGroups() {
   // chosen value has to be captured before the rewrite and restored after
   const previousFilter = document.getElementById("label-group-filter")?.value || "";
 
-  let html = `<h2>Label groups</h2>
-    <label>Show
-      <select id="label-group-filter">
-        <option value="">All</option>
-        <option value="deciphered">Deciphered</option>
-        <option value="not-deciphered">Not deciphered</option>
-      </select>
-    </label>
-    <ul>`;
-  for (const key of keys) {
+  function renderGroupLi(key) {
     const group = groups[key];
     const withValues = group.members.filter((m) => m.value !== null);
     const distinctValues = new Set(withValues.map((m) => m.value)).size;
@@ -1215,8 +1226,8 @@ function renderLabelGroups() {
     // — they just aren't named up front here. Naming happens per-match when
     // you Mark deciphered or Watch, so this just lists what's been named so far.
     const decipheredFields = decipheredFieldsFor(group.name, group.direction);
-    if (previousFilter === "deciphered" && decipheredFields.length === 0) continue;
-    if (previousFilter === "not-deciphered" && decipheredFields.length > 0) continue;
+    if (previousFilter === "deciphered" && decipheredFields.length === 0) return "";
+    if (previousFilter === "not-deciphered" && decipheredFields.length > 0) return "";
 
     const decipheredNote = decipheredFields.length
       ? ` — <span class="deciphered-note">deciphered: ${decipheredFields
@@ -1224,7 +1235,7 @@ function renderLabelGroups() {
           .join(", ")}</span>`
       : "";
 
-    const summaryLine = `<strong>${escapeHtml(group.name)}</strong> (${group.direction}, ${group.members.length} labeled, ${withValues.length} with a value, ${distinctValues} distinct)${decipheredNote}`;
+    const summaryLine = `<strong>${escapeHtml(group.name)}</strong> (${group.members.length} labeled, ${withValues.length} with a value, ${distinctValues} distinct)${decipheredNote}`;
     const actionButtons = `
       <button class="analyze-group-btn" data-key="${escapeHtml(key)}" ${distinctValues < 2 ? "disabled" : ""}>Analyze</button>
       <button class="generate-driver-btn" data-label="${escapeHtml(group.name)}" data-direction="${group.direction}" ${decipheredFields.length ? "" : "disabled"} title="${decipheredFields.length ? "" : "Mark deciphered first"}">Generate driver function</button>
@@ -1233,11 +1244,29 @@ function renderLabelGroups() {
     // every group stays in the list — a fully deciphered one just collapses
     // down to its one-line summary so the panel doesn't keep growing as you
     // finish more labels, without losing track of what's already been solved
-    html += decipheredFields.length
+    return decipheredFields.length
       ? `<li><details class="label-group-details"><summary>${summaryLine}</summary>${actionButtons}</details></li>`
       : `<li>${summaryLine}${actionButtons}</li>`;
   }
-  html += "</ul>";
+
+  // outputs (commands the host sends) and inputs (readings the host
+  // receives) are different mental categories entirely — mixing them in
+  // one list made it harder to scan for "what can I send" vs "what am I
+  // reading back"
+  const outputsHtml = keys.filter((k) => groups[k].direction === "OUT").map(renderGroupLi).join("");
+  const inputsHtml = keys.filter((k) => groups[k].direction === "IN").map(renderGroupLi).join("");
+
+  let html = `<h2>Label groups</h2>
+    <label>Show
+      <select id="label-group-filter">
+        <option value="">All</option>
+        <option value="deciphered">Deciphered</option>
+        <option value="not-deciphered">Not deciphered</option>
+      </select>
+    </label>`;
+  if (outputsHtml) html += `<h3>Outputs (OUT)</h3><ul>${outputsHtml}</ul>`;
+  if (inputsHtml) html += `<h3>Inputs (IN)</h3><ul>${inputsHtml}</ul>`;
+  if (!outputsHtml && !inputsHtml) html += `<p class="hint">No groups match this filter.</p>`;
   container.innerHTML = html;
   document.getElementById("label-group-filter").value = previousFilter;
   document.getElementById("label-group-filter").addEventListener("change", renderLabelGroups);

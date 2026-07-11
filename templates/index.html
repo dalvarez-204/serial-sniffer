@@ -71,7 +71,7 @@
   </div>
 
   <div id="analysis-panel" class="hidden">
-    <h2>Analysis <span class="info-icon" title="For every possible byte span, in both byte orders, it decodes that span as an integer across all your messages, then checks whether multiplying your expected values by a candidate scale (the built-ins, or ones you type into Scales) reproduces those raw bytes — within Tolerance, which is expressed in your real units and automatically converted to raw counts per candidate scale. If you set Min/Max value, it also derives one extra scale per common precision constant (255/1023/4095/65535) from Max minus Min — useful when the device's resolution is a known bit-depth spread over a known physical range.">ⓘ</span></h2>
+    <h2>Analysis <span id="analysis-context-label"></span> <span class="info-icon" title="For every possible byte span, in both byte orders, it decodes that span as an integer across all your messages, then checks whether multiplying your expected values by a candidate scale (the built-ins, or ones you type into Scales) reproduces those raw bytes — within Tolerance, which is expressed in your real units and automatically converted to raw counts per candidate scale. If you set Min/Max value, it also derives one extra scale per common precision constant (255/1023/4095/65535) from Max minus Min — useful when the device's resolution is a known bit-depth spread over a known physical range.">ⓘ</span></h2>
     <div id="analysis-messages"></div>
     <div class="analysis-controls">
       <label>Start <span class="info-icon" title="Restricts the search to sub-spans within this region, instead of the whole message. Leave blank along with End to search everywhere.">ⓘ</span> <input id="span-start" type="number" min="0" placeholder="optional"></label>
@@ -155,6 +155,8 @@
     <button id="replay-copy" class="hidden">Copy to clipboard</button>
     <button id="replay-close">Close</button>
   </div>
+
+  <div id="pig-sniff" class="hidden">🐽</div>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>

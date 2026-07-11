@@ -283,6 +283,7 @@ td.byte.deciphered-value {
 #driver-mock-note { color: #ffa500; font-size: 0.8rem; font-weight: normal; }
 
 #label-groups { margin-top: 1.5rem; }
+#label-groups h3 { margin: 1rem 0 0.4rem; font-size: 0.95rem; color: #999; text-transform: uppercase; letter-spacing: 0.03em; }
 #label-groups ul { list-style: none; margin: 0; padding: 0; }
 #label-groups li {
   padding: 0.5rem 0.75rem;
@@ -409,3 +410,28 @@ td.byte.span-start-marker.span-end-marker { box-shadow: inset 3px 0 0 0 #b98aff,
 .match-group li:first-child { border-top: none; padding-top: 0; }
 .match-primary { font-size: 0.85rem; }
 .match-secondary { font-size: 0.7rem; margin-top: 0.15rem; }
+
+/* a little celebration for "Mark deciphered" — this is a SERIAL SNIFFER, after all */
+#pig-sniff {
+  position: fixed;
+  top: 50%;
+  left: -10%;
+  font-size: 4rem;
+  z-index: 9999;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+#pig-sniff.hidden { display: none; }
+#pig-sniff.sniffing { animation: pig-sniff-across 1.8s ease-in-out forwards; }
+@keyframes pig-sniff-across {
+  0%   { left: -10%; transform: translateY(-50%) rotate(0deg); }
+  10%  { transform: translateY(-50%) rotate(-10deg); }
+  20%  { transform: translateY(-44%) rotate(10deg); }
+  30%  { transform: translateY(-56%) rotate(-10deg); }
+  40%  { transform: translateY(-50%) rotate(10deg); }
+  50%  { left: 50%; transform: translateY(-50%) rotate(-10deg); }
+  60%  { transform: translateY(-44%) rotate(10deg); }
+  70%  { transform: translateY(-56%) rotate(-10deg); }
+  80%  { transform: translateY(-50%) rotate(10deg); }
+  100% { left: 110%; transform: translateY(-50%) rotate(0deg); }
+}
