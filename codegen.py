@@ -5,6 +5,7 @@ rest of the pipeline (context building, prompt, endpoint, UI) can be
 exercised and tested before a key is available.
 """
 
+import concurrent.futures
 import json
 import os
 
@@ -543,18 +544,37 @@ def generate_full_driver_code(capture_records, analysis, all_deciphered, labels)
     client = anthropic.Anthropic(api_key=api_key)
 
     warnings = []
-    label_results = []
-    for ctx in label_contexts:
-        code, _ = generate_driver_code(ctx)
-        if code.lstrip().startswith("# WARNING"):
-            warnings.append(f'"{ctx["label"]}" ({ctx["direction"]}): self-verification failed twice — check its arithmetic by hand')
-        label_results.append({
-            "label": ctx["label"],
-            "direction": ctx["direction"],
-            "length": ctx["length"],
-            "code": code,
-            "params": [f["param"] for f in ctx["deciphered_fields"]],
-        })
+    in_samples = [h for ctx in label_contexts if ctx["direction"] == "IN" for h in ctx["sample_hex"]]
+
+    # every one of these Claude calls is fully independent (no shared state,
+    # nothing depends on another's result) — run them all concurrently
+    # instead of one after another, since sequentially this can mean N+1
+    # round-trips (each easily 10-30s with adaptive thinking, some retried
+    # once on top of that) before anything at all comes back
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(label_contexts) + 1) as executor:
+        label_futures = [executor.submit(generate_driver_code, ctx) for ctx in label_contexts]
+        frame_sync_future = executor.submit(generate_frame_sync_code, client, in_samples) if in_samples else None
+
+        label_results = []
+        for ctx, future in zip(label_contexts, label_futures):
+            code, _ = future.result()
+            if code.lstrip().startswith("# WARNING"):
+                warnings.append(f'"{ctx["label"]}" ({ctx["direction"]}): self-verification failed twice — check its arithmetic by hand')
+            label_results.append({
+                "label": ctx["label"],
+                "direction": ctx["direction"],
+                "length": ctx["length"],
+                "code": code,
+                "params": [f["param"] for f in ctx["deciphered_fields"]],
+            })
+
+        if frame_sync_future is not None:
+            frame_sync_code, frame_sync_error = frame_sync_future.result()
+            if frame_sync_error:
+                warnings.append(f"frame sync (read_frame): {frame_sync_error} — poll() will raise NotImplementedError until this is fixed")
+        else:
+            frame_sync_code = None
+            warnings.append("no IN-direction deciphered labels — poll() has nothing to read; only send_<label> methods were generated")
 
     discriminators = _find_discriminators(label_contexts)
     in_contexts = [ctx for ctx in label_contexts if ctx["direction"] == "IN"]
@@ -568,15 +588,6 @@ def generate_full_driver_code(capture_records, analysis, all_deciphered, labels)
             f"couldn't find a byte that distinguishes incoming labels sharing length(s) "
             f"{sorted(ambiguous_lengths)} — poll() will match whichever of those comes first"
         )
-
-    in_samples = [h for ctx in label_contexts if ctx["direction"] == "IN" for h in ctx["sample_hex"]]
-    frame_sync_code = None
-    if in_samples:
-        frame_sync_code, frame_sync_error = generate_frame_sync_code(client, in_samples)
-        if frame_sync_error:
-            warnings.append(f"frame sync (read_frame): {frame_sync_error} — poll() will raise NotImplementedError until this is fixed")
-    else:
-        warnings.append("no IN-direction deciphered labels — poll() has nothing to read; only send_<label> methods were generated")
 
     code = assemble_full_driver(label_results, discriminators, frame_sync_code)
     return code, warnings, False
