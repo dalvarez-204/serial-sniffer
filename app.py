@@ -379,6 +379,29 @@ def api_delete_label(index):
     return jsonify({"ok": True})
 
 
+@app.route("/api/labels_by_name", methods=["DELETE"])
+def api_delete_labels_by_name():
+    """Removes a label from every message in its group at once — the Label
+    groups panel's bulk "Remove label" action, instead of clearing messages
+    one at a time."""
+    payload = request.get_json()
+    name = payload["name"]
+    direction = payload["direction"]
+    labels = load_labels()
+    if not os.path.exists(CAPTURE_FILE):
+        return jsonify({"ok": True, "removed": 0})
+
+    direction_by_seq = {seq: d for seq, _, d, data in load_capture_log(CAPTURE_FILE) if len(data) > 0}
+    to_remove = [
+        key for key, label in labels.items()
+        if label.get("name") == name and direction_by_seq.get(int(key)) == direction
+    ]
+    for key in to_remove:
+        labels.pop(key, None)
+    save_labels(labels)
+    return jsonify({"ok": True, "removed": len(to_remove)})
+
+
 @app.route("/api/find_value", methods=["POST"])
 def api_find_value():
     payload = request.get_json()

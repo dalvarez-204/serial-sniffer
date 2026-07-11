@@ -119,6 +119,16 @@ function getActiveMonitorsForMessage(msg) {
   return monitorsFor(label.name, msg.direction);
 }
 
+function updateLabelFilterOptions() {
+  const select = document.getElementById("label-filter");
+  const current = select.value;
+  const names = new Set();
+  Object.values(state.labels).forEach((l) => { if (l && l.name) names.add(l.name); });
+  const sorted = Array.from(names).sort();
+  select.innerHTML = `<option value="">All</option>` + sorted.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join("");
+  if (sorted.includes(current)) select.value = current;
+}
+
 function render() {
   const scrollY = window.scrollY;
   const tableContainer = document.getElementById("capture-table");
@@ -135,17 +145,10 @@ function render() {
     ? state.messages.filter((m) => m.direction === directionFilter)
     : state.messages;
 
-  if (document.getElementById("sort-by").value === "label") {
-    // unlabeled messages sort after every labeled one, in their original
-    // capture order relative to each other (Array.sort is stable)
-    filteredMessages = [...filteredMessages].sort((a, b) => {
-      const nameA = state.labels[a.index]?.name || "";
-      const nameB = state.labels[b.index]?.name || "";
-      if (!nameA && !nameB) return 0;
-      if (!nameA) return 1;
-      if (!nameB) return -1;
-      return nameA.localeCompare(nameB);
-    });
+  updateLabelFilterOptions();
+  const labelFilter = document.getElementById("label-filter").value;
+  if (labelFilter) {
+    filteredMessages = filteredMessages.filter((m) => (state.labels[m.index]?.name || "") === labelFilter);
   }
 
   // Only warn about groups that actually have a message in view right now —
@@ -1208,7 +1211,8 @@ function renderLabelGroups() {
     const summaryLine = `<strong>${escapeHtml(group.name)}</strong> (${group.direction}, ${group.members.length} labeled, ${withValues.length} with a value, ${distinctValues} distinct)${decipheredNote}`;
     const actionButtons = `
       <button class="analyze-group-btn" data-key="${escapeHtml(key)}" ${distinctValues < 2 ? "disabled" : ""}>Analyze</button>
-      <button class="generate-driver-btn" data-label="${escapeHtml(group.name)}" data-direction="${group.direction}" ${decipheredFields.length ? "" : "disabled"} title="${decipheredFields.length ? "" : "Mark deciphered first"}">Generate driver function</button>`;
+      <button class="generate-driver-btn" data-label="${escapeHtml(group.name)}" data-direction="${group.direction}" ${decipheredFields.length ? "" : "disabled"} title="${decipheredFields.length ? "" : "Mark deciphered first"}">Generate driver function</button>
+      <button class="remove-group-btn danger" data-key="${escapeHtml(key)}" title="Remove this label from every message in the group">Remove label</button>`;
 
     // every group stays in the list — a fully deciphered one just collapses
     // down to its one-line summary so the panel doesn't keep growing as you
@@ -1226,6 +1230,20 @@ function renderLabelGroups() {
 
   document.querySelectorAll(".generate-driver-btn").forEach((btn) => {
     btn.addEventListener("click", () => generateDriver(btn.dataset.label, btn.dataset.direction));
+  });
+
+  document.querySelectorAll(".remove-group-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const group = groups[btn.dataset.key];
+      if (!confirm(`Remove the "${group.name}" label from all ${group.members.length} message(s)? This can't be undone.`)) return;
+      await fetch("/api/labels_by_name", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: group.name, direction: group.direction }),
+      });
+      for (const m of group.members) delete state.labels[m.index];
+      render();
+    });
   });
 }
 
@@ -1383,7 +1401,7 @@ document.getElementById("toggle-deciphered-values").addEventListener("click", ()
 });
 
 document.getElementById("direction-filter").addEventListener("change", render);
-document.getElementById("sort-by").addEventListener("change", render);
+document.getElementById("label-filter").addEventListener("change", render);
 
 async function loadCaptureConfig() {
   const res = await fetch("/api/capture_config");
