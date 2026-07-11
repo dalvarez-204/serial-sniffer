@@ -402,6 +402,60 @@ def api_delete_labels_by_name():
     return jsonify({"ok": True, "removed": len(to_remove)})
 
 
+@app.route("/api/consolidate_labels", methods=["POST"])
+def api_consolidate_labels():
+    """Merges several labels that turned out to be different fields of the
+    SAME message into one — e.g. "get_voltage" and "get_current" discovered
+    to actually be two byte ranges within a single frame. Renames every
+    matching message's label and re-keys every deciphered field and monitor
+    under the new name, instead of losing that work."""
+    payload = request.get_json()
+    names = set(payload["names"])
+    direction = payload["direction"]
+    new_name = payload["new_name"].strip()
+    if not new_name:
+        return jsonify({"error": "new name can't be empty"}), 400
+    if len(names) < 2:
+        return jsonify({"error": "need at least two labels to consolidate"}), 400
+
+    direction_by_seq = {}
+    if os.path.exists(CAPTURE_FILE):
+        direction_by_seq = {seq: d for seq, _, d, data in load_capture_log(CAPTURE_FILE) if len(data) > 0}
+
+    labels = load_labels()
+    relabeled = 0
+    for key, label in labels.items():
+        if label.get("name") in names and direction_by_seq.get(int(key)) == direction:
+            label["name"] = new_name
+            relabeled += 1
+    save_labels(labels)
+
+    def rekey(store):
+        moved = 0
+        rekeyed = {}
+        for key, entry in store.items():
+            if entry["label"] in names and entry["direction"] == direction:
+                entry = {**entry, "label": new_name}
+                rekeyed[deciphered_key(new_name, direction, entry["param"])] = entry
+                moved += 1
+            else:
+                rekeyed[key] = entry
+        return rekeyed, moved
+
+    new_deciphered, moved_deciphered = rekey(load_deciphered())
+    save_deciphered(new_deciphered)
+
+    new_monitors, moved_monitors = rekey(load_monitors())
+    save_monitors(new_monitors)
+
+    return jsonify({
+        "ok": True,
+        "relabeled": relabeled,
+        "moved_deciphered": moved_deciphered,
+        "moved_monitors": moved_monitors,
+    })
+
+
 @app.route("/api/find_value", methods=["POST"])
 def api_find_value():
     payload = request.get_json()

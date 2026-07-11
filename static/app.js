@@ -133,14 +133,28 @@ function getActiveMonitorsForMessage(msg) {
   return monitorsFor(label.name, msg.direction);
 }
 
+let selectedLabelFilters = new Set(); // empty = no filter, show every label (and unlabeled messages)
+
 function updateLabelFilterOptions() {
-  const select = document.getElementById("label-filter");
-  const current = select.value;
   const names = new Set();
   Object.values(state.labels).forEach((l) => { if (l && l.name) names.add(l.name); });
+  // a name that no longer exists (e.g. consolidated away) shouldn't linger as a phantom filter
+  for (const name of Array.from(selectedLabelFilters)) {
+    if (!names.has(name)) selectedLabelFilters.delete(name);
+  }
   const sorted = Array.from(names).sort();
-  select.innerHTML = `<option value="">All</option>` + sorted.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join("");
-  if (sorted.includes(current)) select.value = current;
+  document.getElementById("label-filter-checkboxes").innerHTML = sorted
+    .map((n) => `<label class="checkbox-label"><input type="checkbox" class="label-filter-checkbox" value="${escapeHtml(n)}" ${selectedLabelFilters.has(n) ? "checked" : ""}> ${escapeHtml(n)}</label>`)
+    .join("");
+  document.getElementById("label-filter-summary").textContent =
+    selectedLabelFilters.size > 0 ? `Label filter (${selectedLabelFilters.size})` : "Label filter";
+  document.querySelectorAll(".label-filter-checkbox").forEach((cb) => {
+    cb.addEventListener("change", (e) => {
+      if (e.target.checked) selectedLabelFilters.add(e.target.value);
+      else selectedLabelFilters.delete(e.target.value);
+      render();
+    });
+  });
 }
 
 function render() {
@@ -160,9 +174,8 @@ function render() {
     : state.messages;
 
   updateLabelFilterOptions();
-  const labelFilter = document.getElementById("label-filter").value;
-  if (labelFilter) {
-    filteredMessages = filteredMessages.filter((m) => (state.labels[m.index]?.name || "") === labelFilter);
+  if (selectedLabelFilters.size > 0) {
+    filteredMessages = filteredMessages.filter((m) => selectedLabelFilters.has(state.labels[m.index]?.name || ""));
   }
 
   // Only warn about groups that actually have a message in view right now —
@@ -1191,6 +1204,8 @@ function renderMonitorsPanel() {
   });
 }
 
+let selectedConsolidateKeys = new Set(); // group keys ("name::direction") checked for consolidation
+
 function renderLabelGroups() {
   const groups = {};
   for (const [indexStr, label] of Object.entries(state.labels)) {
@@ -1235,7 +1250,8 @@ function renderLabelGroups() {
           .join(", ")}</span>`
       : "";
 
-    const summaryLine = `<strong>${escapeHtml(group.name)}</strong> (${group.members.length} labeled, ${withValues.length} with a value, ${distinctValues} distinct)${decipheredNote}`;
+    const consolidateCheckbox = `<input type="checkbox" class="consolidate-select-checkbox" data-key="${escapeHtml(key)}" title="Select for consolidating with another label" ${selectedConsolidateKeys.has(key) ? "checked" : ""}>`;
+    const summaryLine = `${consolidateCheckbox} <strong>${escapeHtml(group.name)}</strong> (${group.members.length} labeled, ${withValues.length} with a value, ${distinctValues} distinct)${decipheredNote}`;
     const actionButtons = `
       <button class="analyze-group-btn" data-key="${escapeHtml(key)}" ${distinctValues < 2 ? "disabled" : ""}>Analyze</button>
       <button class="generate-driver-btn" data-label="${escapeHtml(group.name)}" data-direction="${group.direction}" ${decipheredFields.length ? "" : "disabled"} title="${decipheredFields.length ? "" : "Mark deciphered first"}">Generate driver function</button>
@@ -1249,12 +1265,23 @@ function renderLabelGroups() {
       : `<li>${summaryLine}${actionButtons}</li>`;
   }
 
+  // a stale key (its group no longer exists — consolidated away, or its
+  // last message got unlabeled) shouldn't linger as a phantom selection
+  for (const key of Array.from(selectedConsolidateKeys)) {
+    if (!groups[key]) selectedConsolidateKeys.delete(key);
+  }
+
   // outputs (commands the host sends) and inputs (readings the host
   // receives) are different mental categories entirely — mixing them in
   // one list made it harder to scan for "what can I send" vs "what am I
   // reading back"
   const outputsHtml = keys.filter((k) => groups[k].direction === "OUT").map(renderGroupLi).join("");
   const inputsHtml = keys.filter((k) => groups[k].direction === "IN").map(renderGroupLi).join("");
+
+  // consolidating only makes sense within one direction — merging an OUT
+  // command with an IN reading isn't "the same message, different fields"
+  const selectedDirections = new Set(Array.from(selectedConsolidateKeys).map((k) => groups[k]?.direction));
+  const canConsolidate = selectedConsolidateKeys.size >= 2 && selectedDirections.size === 1;
 
   let html = `<h2>Label groups</h2>
     <label>Show
@@ -1263,13 +1290,46 @@ function renderLabelGroups() {
         <option value="deciphered">Deciphered</option>
         <option value="not-deciphered">Not deciphered</option>
       </select>
-    </label>`;
+    </label>
+    <button id="consolidate-labels-btn" ${canConsolidate ? "" : "disabled"} title="Check two or more labels (same direction) that turned out to be different fields of the same message, then merge them into one">Consolidate selected labels${selectedConsolidateKeys.size ? ` (${selectedConsolidateKeys.size})` : ""}</button>`;
   if (outputsHtml) html += `<h3>Outputs (OUT)</h3><ul>${outputsHtml}</ul>`;
   if (inputsHtml) html += `<h3>Inputs (IN)</h3><ul>${inputsHtml}</ul>`;
   if (!outputsHtml && !inputsHtml) html += `<p class="hint">No groups match this filter.</p>`;
   container.innerHTML = html;
   document.getElementById("label-group-filter").value = previousFilter;
   document.getElementById("label-group-filter").addEventListener("change", renderLabelGroups);
+
+  document.querySelectorAll(".consolidate-select-checkbox").forEach((cb) => {
+    cb.addEventListener("change", (e) => {
+      e.stopPropagation();
+      if (e.target.checked) selectedConsolidateKeys.add(e.target.dataset.key);
+      else selectedConsolidateKeys.delete(e.target.dataset.key);
+      renderLabelGroups();
+    });
+  });
+
+  document.getElementById("consolidate-labels-btn").addEventListener("click", async () => {
+    const selectedGroups = Array.from(selectedConsolidateKeys).map((k) => groups[k]).filter(Boolean);
+    const direction = selectedGroups[0].direction;
+    const names = selectedGroups.map((g) => g.name);
+    const newName = prompt(
+      `Merge ${names.map((n) => `"${n}"`).join(", ")} (${direction}) into one label — what should the combined label be called?`,
+      names[0]
+    );
+    if (!newName || !newName.trim()) return;
+    const res = await fetch("/api/consolidate_labels", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ names, direction, new_name: newName.trim() }),
+    });
+    const result = await res.json();
+    if (result.error) {
+      alert(`Couldn't consolidate: ${result.error}`);
+      return;
+    }
+    selectedConsolidateKeys.clear();
+    await loadData();
+  });
 
   document.querySelectorAll(".analyze-group-btn").forEach((btn) => {
     btn.addEventListener("click", () => analyzeLabelGroup(groups[btn.dataset.key]));
@@ -1448,7 +1508,6 @@ document.getElementById("toggle-deciphered-values").addEventListener("click", ()
 });
 
 document.getElementById("direction-filter").addEventListener("change", render);
-document.getElementById("label-filter").addEventListener("change", render);
 
 async function loadCaptureConfig() {
   const res = await fetch("/api/capture_config");
