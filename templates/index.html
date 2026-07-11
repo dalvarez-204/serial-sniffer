@@ -39,16 +39,13 @@
     <button id="generate-full-driver" title="Combines every deciphered label into one poll/send driver class, with Nominal Core publishing built in">Generate full driver</button>
     <label class="checkbox-label"><input type="checkbox" id="toggle-full-timestamp"> Show date</label>
     <label class="checkbox-label"><input type="checkbox" id="toggle-ascii" checked> Show ASCII</label>
-    <label>Direction
-      <select id="direction-filter">
-        <option value="">All</option>
-        <option value="OUT">OUT only</option>
-        <option value="IN">IN only</option>
-      </select>
-    </label>
-    <details id="label-filter-details" class="toolbar-details">
-      <summary id="label-filter-summary">Label filter</summary>
-      <div id="label-filter-checkboxes"></div>
+    <details id="filter-details" class="toolbar-details">
+      <summary id="filter-summary">Filter</summary>
+      <div id="filter-panel">
+        <div id="direction-filter-checkboxes"></div>
+        <hr>
+        <div id="label-filter-checkboxes"></div>
+      </div>
     </details>
   </div>
   <div id="capture-table"></div>

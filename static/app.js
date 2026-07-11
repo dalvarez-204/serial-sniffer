@@ -133,9 +133,25 @@ function getActiveMonitorsForMessage(msg) {
   return monitorsFor(label.name, msg.direction);
 }
 
+let selectedDirectionFilters = new Set(); // empty = no filter, show every direction
 let selectedLabelFilters = new Set(); // empty = no filter, show every label (and unlabeled messages)
 
-function updateLabelFilterOptions() {
+// one row per option: checked rows highlight and grow a red x for a quick
+// way to clear that specific filter, in addition to just unchecking it
+function filterCheckboxRow(checkboxClass, value, displayText, isChecked) {
+  const removeX = isChecked
+    ? `<span class="filter-remove-x" data-checkbox-class="${checkboxClass}" data-value="${escapeHtml(value)}" title="Remove this filter">×</span>`
+    : "";
+  return `<label class="checkbox-label filter-row ${isChecked ? "filter-row-active" : ""}">
+      <input type="checkbox" class="${checkboxClass}" value="${escapeHtml(value)}" ${isChecked ? "checked" : ""}> ${escapeHtml(displayText)}${removeX}
+    </label>`;
+}
+
+function updateFilterPanel() {
+  document.getElementById("direction-filter-checkboxes").innerHTML = ["OUT", "IN"]
+    .map((d) => filterCheckboxRow("direction-filter-checkbox", d, d, selectedDirectionFilters.has(d)))
+    .join("");
+
   const names = new Set();
   Object.values(state.labels).forEach((l) => { if (l && l.name) names.add(l.name); });
   // a name that no longer exists (e.g. consolidated away) shouldn't linger as a phantom filter
@@ -144,14 +160,32 @@ function updateLabelFilterOptions() {
   }
   const sorted = Array.from(names).sort();
   document.getElementById("label-filter-checkboxes").innerHTML = sorted
-    .map((n) => `<label class="checkbox-label"><input type="checkbox" class="label-filter-checkbox" value="${escapeHtml(n)}" ${selectedLabelFilters.has(n) ? "checked" : ""}> ${escapeHtml(n)}</label>`)
+    .map((n) => filterCheckboxRow("label-filter-checkbox", n, n, selectedLabelFilters.has(n)))
     .join("");
-  document.getElementById("label-filter-summary").textContent =
-    selectedLabelFilters.size > 0 ? `Label filter (${selectedLabelFilters.size})` : "Label filter";
+
+  const totalActive = selectedDirectionFilters.size + selectedLabelFilters.size;
+  document.getElementById("filter-summary").textContent = totalActive > 0 ? `Filter (${totalActive})` : "Filter";
+
+  document.querySelectorAll(".direction-filter-checkbox").forEach((cb) => {
+    cb.addEventListener("change", (e) => {
+      if (e.target.checked) selectedDirectionFilters.add(e.target.value);
+      else selectedDirectionFilters.delete(e.target.value);
+      render();
+    });
+  });
   document.querySelectorAll(".label-filter-checkbox").forEach((cb) => {
     cb.addEventListener("change", (e) => {
       if (e.target.checked) selectedLabelFilters.add(e.target.value);
       else selectedLabelFilters.delete(e.target.value);
+      render();
+    });
+  });
+  document.querySelectorAll(".filter-remove-x").forEach((x) => {
+    x.addEventListener("click", (e) => {
+      e.preventDefault(); // a <span> inside a <label> would otherwise also toggle the linked checkbox
+      e.stopPropagation();
+      const set = x.dataset.checkboxClass === "direction-filter-checkbox" ? selectedDirectionFilters : selectedLabelFilters;
+      set.delete(x.dataset.value);
       render();
     });
   });
@@ -168,12 +202,11 @@ function render() {
     Array.from(document.querySelectorAll(".row-select:checked")).map((cb) => Number(cb.dataset.index))
   );
 
-  const directionFilter = document.getElementById("direction-filter").value;
-  let filteredMessages = directionFilter
-    ? state.messages.filter((m) => m.direction === directionFilter)
-    : state.messages;
-
-  updateLabelFilterOptions();
+  updateFilterPanel();
+  let filteredMessages = state.messages;
+  if (selectedDirectionFilters.size > 0) {
+    filteredMessages = filteredMessages.filter((m) => selectedDirectionFilters.has(m.direction));
+  }
   if (selectedLabelFilters.size > 0) {
     filteredMessages = filteredMessages.filter((m) => selectedLabelFilters.has(state.labels[m.index]?.name || ""));
   }
@@ -1226,10 +1259,11 @@ function renderLabelGroups() {
     return;
   }
 
-  // the filter <select> lives inside this dynamically-regenerated HTML (it
-  // only makes sense to show while there's at least one group), so its
-  // chosen value has to be captured before the rewrite and restored after
+  // these two <select>s live inside this dynamically-regenerated HTML (they
+  // only make sense to show while there's at least one group), so their
+  // chosen values have to be captured before the rewrite and restored after
   const previousFilter = document.getElementById("label-group-filter")?.value || "";
+  const previousVisibility = document.getElementById("label-groups-visibility")?.value || "";
 
   function renderGroupLi(key) {
     const group = groups[key];
@@ -1291,13 +1325,25 @@ function renderLabelGroups() {
         <option value="not-deciphered">Not deciphered</option>
       </select>
     </label>
+    <label>Groups
+      <select id="label-groups-visibility">
+        <option value="">Show groups</option>
+        <option value="hide">Hide all groups</option>
+      </select>
+    </label>
     <button id="consolidate-labels-btn" ${canConsolidate ? "" : "disabled"} title="Check two or more labels (same direction) that turned out to be different fields of the same message, then merge them into one">Consolidate selected labels${selectedConsolidateKeys.size ? ` (${selectedConsolidateKeys.size})` : ""}</button>`;
-  if (outputsHtml) html += `<h3>Outputs (OUT)</h3><ul>${outputsHtml}</ul>`;
-  if (inputsHtml) html += `<h3>Inputs (IN)</h3><ul>${inputsHtml}</ul>`;
-  if (!outputsHtml && !inputsHtml) html += `<p class="hint">No groups match this filter.</p>`;
+  if (previousVisibility === "hide") {
+    html += `<p class="hint">Groups hidden (${keys.length} total) — set "Groups" back to "Show groups" to see them.</p>`;
+  } else {
+    if (outputsHtml) html += `<h3>Outputs (OUT)</h3><ul>${outputsHtml}</ul>`;
+    if (inputsHtml) html += `<h3>Inputs (IN)</h3><ul>${inputsHtml}</ul>`;
+    if (!outputsHtml && !inputsHtml) html += `<p class="hint">No groups match this filter.</p>`;
+  }
   container.innerHTML = html;
   document.getElementById("label-group-filter").value = previousFilter;
+  document.getElementById("label-groups-visibility").value = previousVisibility;
   document.getElementById("label-group-filter").addEventListener("change", renderLabelGroups);
+  document.getElementById("label-groups-visibility").addEventListener("change", renderLabelGroups);
 
   document.querySelectorAll(".consolidate-select-checkbox").forEach((cb) => {
     cb.addEventListener("change", (e) => {
@@ -1507,7 +1553,6 @@ document.getElementById("toggle-deciphered-values").addEventListener("click", ()
   render();
 });
 
-document.getElementById("direction-filter").addEventListener("change", render);
 
 async function loadCaptureConfig() {
   const res = await fetch("/api/capture_config");
