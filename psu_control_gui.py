@@ -21,6 +21,12 @@ import serial
 GRAPH_WIDTH = 440
 GRAPH_HEIGHT = 160
 GRAPH_HISTORY_LEN = 100
+# fixed to the PSU's real full-scale range (matching the "0-30V"/"0-5A"
+# hints on the entry fields below), not autoscaled to whatever's currently
+# on screen — otherwise a small ripple looks exactly as dramatic on the
+# graph as a full sweep, and you lose any sense of absolute magnitude
+VOLTAGE_RANGE = (0, 30)
+CURRENT_RANGE = (0, 5)
 
 PORT = "/dev/ttyACM0"
 BAUD = 115200
@@ -156,22 +162,22 @@ class PsuGui:
 
     def _draw_graph(self):
         self.graph.delete("all")
-        self._draw_series(self.voltage_history, "#4a9eff")
-        self._draw_series(self.current_history, "#ffa500")
-        self.graph.create_text(8, 8, anchor="nw", text="voltage", fill="#4a9eff", font=("Courier", 9))
-        self.graph.create_text(8, 22, anchor="nw", text="current", fill="#ffa500", font=("Courier", 9))
+        self._draw_series(self.voltage_history, "#4a9eff", VOLTAGE_RANGE)
+        self._draw_series(self.current_history, "#ffa500", CURRENT_RANGE)
+        self.graph.create_text(8, 8, anchor="nw", text="voltage (0-30V)", fill="#4a9eff", font=("Courier", 9))
+        self.graph.create_text(8, 22, anchor="nw", text="current (0-5A)", fill="#ffa500", font=("Courier", 9))
 
-    def _draw_series(self, history, color):
+    def _draw_series(self, history, color, value_range):
         if len(history) < 2:
             return
-        lo, hi = min(history), max(history)
-        span = hi - lo or 1.0  # a flat line shouldn't divide by zero
+        lo, hi = value_range
         margin = 5
         step = GRAPH_WIDTH / (len(history) - 1)
         points = []
         for i, value in enumerate(history):
             x = i * step
-            y = GRAPH_HEIGHT - margin - ((value - lo) / span) * (GRAPH_HEIGHT - 2 * margin)
+            clamped = max(lo, min(hi, value))  # a reading past the fixed range pins to the edge instead of escaping the canvas
+            y = GRAPH_HEIGHT - margin - ((clamped - lo) / (hi - lo)) * (GRAPH_HEIGHT - 2 * margin)
             points.extend([x, y])
         self.graph.create_line(*points, fill=color, width=2)
 

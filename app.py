@@ -278,6 +278,23 @@ def api_clear_capture():
     return jsonify({"ok": True})
 
 
+@app.route("/api/instrument", methods=["DELETE"])
+def api_new_instrument():
+    """A full reset for starting on a different device: unlike "Clear all
+    captures" (which leaves deciphered/watched fields alone, for re-capturing
+    the SAME instrument's traffic without losing already-solved work), this
+    also wipes deciphered.json and monitors.json — leftover fields from a
+    previous instrument have no reason to apply to a new one."""
+    for path in (CAPTURE_FILE, LABELS_FILE, DECIPHERED_FILE, MONITORS_FILE):
+        if os.path.exists(path):
+            os.remove(path)
+    capture_state["next_seq"] = 0
+    _capture_cache["key"] = None
+    _capture_cache["messages"] = None
+    _capture_cache["analysis"] = None
+    return jsonify({"ok": True})
+
+
 @app.route("/api/capture_config", methods=["GET"])
 def api_get_capture_config():
     return jsonify(load_capture_config())

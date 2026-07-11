@@ -1270,6 +1270,15 @@ document.getElementById("clear-captures").addEventListener("click", async () => 
   await loadData();
 });
 
+document.getElementById("new-instrument").addEventListener("click", async () => {
+  if (!confirm("Start on a new instrument? This wipes captures, labels, deciphered fields, AND watches — everything solved for the current device is gone. This can't be undone.")) return;
+  await fetch("/api/instrument", { method: "DELETE" });
+  analysisSet = [];
+  lastMatches = [];
+  document.getElementById("analysis-panel").classList.add("hidden");
+  await loadData();
+});
+
 let pollingInterval = null;
 
 function setPollingInterval(active) {
