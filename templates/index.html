@@ -36,6 +36,7 @@
     <button id="clear-captures" class="danger">Clear all captures</button>
     <button id="new-instrument" class="danger" title="Wipes captures, labels, deciphered fields, and watches — starts completely clean for a different device">New instrument</button>
     <button id="toggle-deciphered-values" title="Replace deciphered bytes with their decoded real-world values">Show deciphered</button>
+    <button id="generate-full-driver" title="Combines every deciphered label into one poll/send driver class, with Nominal Core publishing built in">Generate full driver</button>
     <label class="checkbox-label"><input type="checkbox" id="toggle-full-timestamp"> Show date</label>
     <label class="checkbox-label"><input type="checkbox" id="toggle-ascii" checked> Show ASCII</label>
     <label>Direction
@@ -51,7 +52,8 @@
   <div id="label-groups"></div>
 
   <div id="driver-panel" class="hidden">
-    <h2>Generated driver function <span id="driver-mock-note" class="hint"></span></h2>
+    <h2 id="driver-heading">Generated driver function <span id="driver-mock-note" class="hint"></span></h2>
+    <div id="driver-warnings"></div>
     <pre id="driver-code"></pre>
     <button id="driver-copy">Copy to clipboard</button>
     <button id="driver-close">Close</button>

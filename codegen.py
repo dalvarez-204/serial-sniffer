@@ -12,12 +12,21 @@ CLAUDE_MODEL = "claude-opus-4-8"
 SAMPLE_LIMIT = 5
 
 
-def build_codegen_context(label, direction, deciphered_fields, capture_records, analysis):
+def build_codegen_context(label, direction, deciphered_fields, capture_records, analysis, labels):
     """Gathers everything needed to describe one labeled message type: framing,
     checksum, every deciphered parameter for this label+direction (there can be
     several — e.g. a "set_waveform" command's wave_type/freq/amplitude/offset
-    all live in one frame), and a few real sample messages."""
-    matching = [data for _, _, d, data in capture_records if d == direction]
+    all live in one frame), and a few real sample messages.
+
+    "labels" (from labels.json, keyed by message seq/index) is required to
+    pick out messages that actually carry THIS label — filtering by
+    direction alone silently mixes in other same-direction, same-length
+    commands (e.g. set_ocp's samples leaking into set_voltage's context),
+    which then get copied in as "constant" bytes for the wrong command."""
+    matching = [
+        data for seq, _, d, data in capture_records
+        if d == direction and labels.get(str(seq), {}).get("name") == label
+    ]
     if not matching:
         return None
 
@@ -199,7 +208,7 @@ def verify_generated_code(code, context):
     return None
 
 
-def _call_claude(client, context, correction=None):
+def _call_claude_raw(client, prompt):
     response = client.messages.create(
         model=CLAUDE_MODEL,
         # generous headroom: adaptive thinking's tokens count against this same
@@ -208,10 +217,14 @@ def _call_claude(client, context, correction=None):
         # cap here silently returns empty output (stop_reason "max_tokens")
         max_tokens=8192,
         thinking={"type": "adaptive"},
-        messages=[{"role": "user", "content": build_prompt(context, correction)}],
+        messages=[{"role": "user", "content": prompt}],
     )
     code = "".join(block.text for block in response.content if block.type == "text")
     return code, response.stop_reason
+
+
+def _call_claude(client, context, correction=None):
+    return _call_claude_raw(client, build_prompt(context, correction))
 
 
 def generate_driver_code(context):
@@ -243,3 +256,315 @@ def generate_driver_code(context):
             )
 
     return code, False
+
+
+def _find_discriminators(label_contexts):
+    """For every length shared by more than one deciphered IN-direction
+    label — e.g. two different incoming reading shapes that happen to be
+    the same size — finds a byte offset that's constant within each label's
+    OWN samples but takes a different constant value between labels. That's
+    the real "command type" byte poll()'s dispatcher needs when length alone
+    can't tell two incoming message shapes apart. OUT-direction labels are
+    excluded entirely: poll() never has to decide between them, since
+    CLOAK never decodes its own outgoing traffic, only what it sends by
+    calling send_<label>() directly. Returns {(direction, length):
+    {"offset": int, "values": {label: value}}}; a group left out of the
+    result had no such offset, so poll() falls back to matching by length
+    alone for it."""
+    groups = {}
+    for ctx in label_contexts:
+        if ctx["direction"] != "IN":
+            continue
+        groups.setdefault((ctx["direction"], ctx["length"]), []).append(ctx)
+
+    discriminators = {}
+    for key, group in groups.items():
+        if len(group) < 2:
+            continue
+        _, length = key
+        per_label_constant = {}
+        for ctx in group:
+            samples = [bytes.fromhex(h) for h in ctx["sample_hex"]]
+            constants = []
+            for offset in range(length):
+                values_at_offset = {s[offset] for s in samples}
+                constants.append(next(iter(values_at_offset)) if len(values_at_offset) == 1 else None)
+            per_label_constant[ctx["label"]] = constants
+
+        for offset in range(length):
+            per_label_value = {label: consts[offset] for label, consts in per_label_constant.items()}
+            if any(v is None for v in per_label_value.values()):
+                continue
+            if len(set(per_label_value.values())) == len(per_label_value):  # every label has a distinct value here
+                discriminators[key] = {"offset": offset, "values": per_label_value}
+                break
+    return discriminators
+
+
+def build_frame_sync_prompt(in_samples, correction=None):
+    correction_note = (
+        f"\n\nA previous attempt at this failed: {correction}\nFix that specific mistake in this attempt.\n"
+        if correction
+        else ""
+    )
+    return f"""You are writing a byte-stream frame synchronizer for a serial instrument protocol, \
+based entirely on the real captured messages below — do not invent structure that isn't \
+evidenced by every sample.
+
+Real captured incoming messages (hex, one per line, in the order they were captured — there \
+may be more than one message shape mixed in):
+{chr(10).join(in_samples)}
+
+Write ONLY this function:
+
+def read_frame(buf: bytes) -> tuple[bytes | None, bytes]:
+    \"\"\"Given an accumulating byte buffer from a live serial read, finds and returns the \
+first complete message in it (start marker, length field, checksum, end marker — whatever \
+the samples above actually show), and whatever bytes are left in buf after that message. \
+Returns (None, buf) unchanged if buf doesn't yet contain one full message.\"\"\"
+
+Infer any start/end markers, length fields, and checksums directly from the samples above — \
+don't assume a specific scheme that isn't actually evidenced.{correction_note}
+
+Output ONLY the Python function code, no prose, no markdown fences, no other functions."""
+
+
+def verify_frame_sync(code, in_samples):
+    """Concatenates the real sample messages into one continuous buffer (as
+    they'd appear back-to-back on a live wire) and checks read_frame()
+    recovers exactly those messages, in order, byte-for-byte — ground truth
+    here is just the samples themselves, nothing an LLM wrote is trusted."""
+    namespace = {}
+    try:
+        exec(code, namespace)  # noqa: S102 — trusted pipeline output, not user input
+    except Exception as e:
+        return f"generated code failed to execute: {e}"
+
+    read_frame = namespace.get("read_frame")
+    if read_frame is None:
+        return "no read_frame() function found in the generated code"
+
+    expected = [bytes.fromhex(h) for h in in_samples]
+    buf = b"".join(expected)
+    recovered = []
+    for _ in range(len(expected) + 2):  # a couple extra calls to catch over/under-reads
+        try:
+            frame, buf = read_frame(buf)
+        except Exception as e:
+            return f"read_frame() raised {e}"
+        if frame is None:
+            break
+        recovered.append(frame)
+
+    if recovered != expected:
+        return (
+            f"expected read_frame() to recover {len(expected)} messages matching the real "
+            f"samples exactly, in order, but got {len(recovered)}: {[f.hex() for f in recovered]}"
+        )
+    return None
+
+
+def generate_frame_sync_code(client, in_samples):
+    """Returns (code, error). Mirrors generate_driver_code's retry-once
+    pattern: self-verify against the real concatenated samples, retry once
+    with the concrete mismatch if it's wrong."""
+    code, stop_reason = _call_claude_raw(client, build_frame_sync_prompt(in_samples))
+    if not code.strip():
+        return f"# Claude returned no code (stop_reason: {stop_reason})", "no code returned"
+
+    error = verify_frame_sync(code, in_samples)
+    if error:
+        code, stop_reason = _call_claude_raw(client, build_frame_sync_prompt(in_samples, correction=error))
+        if not code.strip():
+            return f"# Claude returned no code on retry (stop_reason: {stop_reason})", "no code returned on retry"
+        error = verify_frame_sync(code, in_samples)
+    return code, error
+
+
+def assemble_full_driver(label_results, discriminators, frame_sync_code):
+    """Deterministically stitches the already-generated, already-verified
+    per-label encode_/decode_ functions plus the frame synchronizer into one
+    class. The wiring itself (which decode_ goes with which frame shape,
+    which method calls which encode_) is mechanical given what's already
+    known, so it's plain Python here rather than left for an LLM to
+    reinvent — the only two things Claude actually wrote are the per-label
+    byte math and the frame synchronizer, both already self-verified."""
+    parts = [frame_sync_code.strip()] if frame_sync_code else []
+    parts += [r["code"].strip() for r in label_results]
+    functions_src = "\n\n\n".join(parts)
+
+    send_methods = []
+    for r in label_results:
+        if r["direction"] != "OUT":
+            continue
+        args = ", ".join(f"{p}: float" for p in r["params"])
+        call_args = ", ".join(f"{p}={p}" for p in r["params"])
+        send_methods.append(
+            f'    def send_{r["label"]}(self, {args}) -> None:\n'
+            f'        self.ser.write(encode_{r["label"]}({call_args}))'
+        )
+    send_src = "\n\n".join(send_methods)
+
+    discriminated_labels = {label for info in discriminators.values() for label in info["values"]}
+    dispatch_lines = []
+    for (direction, length), info in discriminators.items():
+        for label, value in info["values"].items():
+            dispatch_lines.append(
+                f"        if len(frame) == {length} and frame[{info['offset']}] == {value}:\n"
+                f'            return "{label}", decode_{label}(frame)'
+            )
+    for r in label_results:
+        if r["direction"] != "IN" or r["label"] in discriminated_labels:
+            continue
+        dispatch_lines.append(
+            f'        if len(frame) == {r["length"]}:\n'
+            f'            return "{r["label"]}", decode_{r["label"]}(frame)'
+        )
+    dispatch_src = "\n".join(dispatch_lines) if dispatch_lines else "        pass"
+
+    if frame_sync_code:
+        poll_method = '''    def poll(self) -> dict | None:
+        """Reads whatever's available, extracts and decodes at most one
+        complete message, publishes its fields to Nominal if a dataset was
+        attached, and appends it to the local log file if one was attached.
+        Returns {"label": ..., "values": {...}}, or None if no full message
+        is buffered yet."""
+        self._buf += self.ser.read(4096)
+        frame, self._buf = read_frame(self._buf)
+        if frame is None:
+            return None
+        label, values = self._dispatch(frame)
+        if label is None:
+            return None
+        if self._stream is not None or self._log_file is not None:
+            import datetime
+            now = datetime.datetime.now()
+            if self._stream is not None:
+                for param, value in values.items():
+                    self._stream.enqueue(channel_name=f"{label}.{param}", timestamp=now, value=value)
+            if self._log_file is not None:
+                import json
+                self._log_file.write(json.dumps({"label": label, "timestamp": now.isoformat(), "values": values}) + "\\n")
+                self._log_file.flush()
+        return {"label": label, "values": values}'''
+    else:
+        poll_method = '''    def poll(self) -> dict | None:
+        """No IN-direction fields were deciphered yet, so there's nothing to read/decode."""
+        raise NotImplementedError("no IN-direction deciphered fields — nothing to poll")'''
+
+    class_src = f'''class InstrumentDriver:
+    """Generated by CLOAK from real captured traffic. poll() reads and
+    decodes incoming messages; send_<label>() encodes and writes outgoing
+    commands; every decoded parameter is published to Nominal Core as its
+    own channel ("<label>.<param>") if a dataset RID is given, and/or
+    appended as a JSON line to a local log file if a path is given — the
+    two are independent, use either, both, or neither."""
+
+    def __init__(
+        self,
+        port: str,
+        baud: int = 115200,
+        nominal_dataset_rid: str | None = None,
+        nominal_profile: str = "default",
+        local_log_path: str | None = None,
+    ):
+        import serial
+        self.ser = serial.Serial(port, baud, timeout=0.2)
+        self._buf = b""
+        self._stream = None
+        if nominal_dataset_rid:
+            from nominal.core import NominalClient
+            client = NominalClient.from_profile(nominal_profile)
+            dataset = client.get_dataset(nominal_dataset_rid)
+            self._stream = dataset.get_write_stream()
+        self._log_file = open(local_log_path, "a") if local_log_path else None
+
+    def close(self) -> None:
+        if self._stream is not None:
+            self._stream.close()
+        if self._log_file is not None:
+            self._log_file.close()
+        self.ser.close()
+
+{send_src if send_src else "    pass"}
+
+    def _dispatch(self, frame: bytes):
+{dispatch_src}
+        return None, None
+
+{poll_method}
+'''
+
+    return f"{functions_src}\n\n\n{class_src}"
+
+
+def generate_full_driver_code(capture_records, analysis, all_deciphered, labels):
+    """Returns (code, warnings, is_mock). Spans every deciphered label —
+    unlike generate_driver_code, which only ever handles one label+direction
+    at a time. Each label's encode_/decode_ is generated and self-verified
+    exactly as it already is today; the frame synchronizer is generated and
+    self-verified against the real concatenated IN samples; the class
+    wiring around them is deterministic, not LLM output."""
+    by_label_direction = {}
+    for entry in all_deciphered.values():
+        by_label_direction.setdefault((entry["label"], entry["direction"]), []).append(entry)
+
+    if not by_label_direction:
+        return None, ["no deciphered fields yet — mark at least one field deciphered first"], True
+
+    label_contexts = []
+    for (label, direction), fields in by_label_direction.items():
+        ctx = build_codegen_context(label, direction, fields, capture_records, analysis, labels)
+        if ctx is not None:
+            label_contexts.append(ctx)
+
+    if not label_contexts:
+        return None, ["no captured messages match any deciphered label"], True
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        stub = "\n\n\n".join(_mock_response(ctx) for ctx in label_contexts)
+        return stub, ["no ANTHROPIC_API_KEY set on the server — showing stubs only"], True
+
+    import anthropic  # only required once a key is actually set
+
+    client = anthropic.Anthropic(api_key=api_key)
+
+    warnings = []
+    label_results = []
+    for ctx in label_contexts:
+        code, _ = generate_driver_code(ctx)
+        if code.lstrip().startswith("# WARNING"):
+            warnings.append(f'"{ctx["label"]}" ({ctx["direction"]}): self-verification failed twice — check its arithmetic by hand')
+        label_results.append({
+            "label": ctx["label"],
+            "direction": ctx["direction"],
+            "length": ctx["length"],
+            "code": code,
+            "params": [f["param"] for f in ctx["deciphered_fields"]],
+        })
+
+    discriminators = _find_discriminators(label_contexts)
+    in_contexts = [ctx for ctx in label_contexts if ctx["direction"] == "IN"]
+    ambiguous_lengths = {
+        ctx["length"]
+        for ctx in in_contexts
+        if sum(1 for c in in_contexts if c["length"] == ctx["length"]) > 1
+    } - {length for (_, length) in discriminators.keys()}
+    if ambiguous_lengths:
+        warnings.append(
+            f"couldn't find a byte that distinguishes incoming labels sharing length(s) "
+            f"{sorted(ambiguous_lengths)} — poll() will match whichever of those comes first"
+        )
+
+    in_samples = [h for ctx in label_contexts if ctx["direction"] == "IN" for h in ctx["sample_hex"]]
+    frame_sync_code = None
+    if in_samples:
+        frame_sync_code, frame_sync_error = generate_frame_sync_code(client, in_samples)
+        if frame_sync_error:
+            warnings.append(f"frame sync (read_frame): self-verification failed — {frame_sync_error}")
+    else:
+        warnings.append("no IN-direction deciphered labels — poll() has nothing to read; only send_<label> methods were generated")
+
+    code = assemble_full_driver(label_results, discriminators, frame_sync_code)
+    return code, warnings, False

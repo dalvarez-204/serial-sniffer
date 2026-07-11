@@ -1208,6 +1208,8 @@ async function generateDriver(label, direction) {
   const panel = document.getElementById("driver-panel");
   const codeEl = document.getElementById("driver-code");
   const noteEl = document.getElementById("driver-mock-note");
+  document.getElementById("driver-heading").firstChild.textContent = "Generated driver function ";
+  document.getElementById("driver-warnings").innerHTML = "";
   panel.classList.remove("hidden");
   noteEl.textContent = "";
   startDriverGenerationSpinner(codeEl);
@@ -1235,6 +1237,42 @@ async function generateDriver(label, direction) {
     ? "(mock output — export ANTHROPIC_API_KEY on the server and retry for a real generated function)"
     : "";
 }
+
+async function generateFullDriver() {
+  const panel = document.getElementById("driver-panel");
+  const codeEl = document.getElementById("driver-code");
+  const noteEl = document.getElementById("driver-mock-note");
+  const warningsEl = document.getElementById("driver-warnings");
+  document.getElementById("driver-heading").firstChild.textContent = "Generated full driver ";
+  warningsEl.innerHTML = "";
+  panel.classList.remove("hidden");
+  noteEl.textContent = "";
+  startDriverGenerationSpinner(codeEl);
+
+  let result;
+  try {
+    const res = await fetch("/api/generate_full_driver", { method: "POST" });
+    result = await res.json();
+  } catch (e) {
+    clearInterval(driverGenerationSpinner);
+    codeEl.textContent = `Error: request failed (${e.message}) — check that the server is running and reachable.`;
+    return;
+  }
+  clearInterval(driverGenerationSpinner);
+  if (result.error) {
+    codeEl.textContent = `Error: ${result.error}`;
+    return;
+  }
+  codeEl.textContent = result.code;
+  noteEl.textContent = result.mock
+    ? "(mock output — export ANTHROPIC_API_KEY on the server and retry for a real generated function)"
+    : "";
+  if (result.warnings && result.warnings.length) {
+    warningsEl.innerHTML = `<div class="warning-banner"><strong>Heads up:</strong><ul>${result.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}</ul></div>`;
+  }
+}
+
+document.getElementById("generate-full-driver").addEventListener("click", generateFullDriver);
 
 document.getElementById("driver-close").addEventListener("click", () => {
   clearInterval(driverGenerationSpinner);

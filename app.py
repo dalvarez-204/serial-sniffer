@@ -7,7 +7,7 @@ import subprocess
 import threading
 
 from first import load_capture_log, analyze_byte_variability, find_checksum_range, find_scaled_value, stream_usb_capture
-from codegen import build_codegen_context, generate_driver_code
+from codegen import build_codegen_context, generate_driver_code, generate_full_driver_code
 from line_coding import capture_line_coding
 
 load_dotenv()
@@ -479,9 +479,9 @@ def api_generate_driver():
     if not deciphered_fields:
         return jsonify({"error": "no deciphered parameters for this label/direction yet"}), 400
 
-    context = build_codegen_context(label, direction, deciphered_fields, records, analysis)
+    context = build_codegen_context(label, direction, deciphered_fields, records, analysis, load_labels())
     if context is None:
-        return jsonify({"error": f'no "{direction}" messages found'}), 400
+        return jsonify({"error": f'no "{direction}" messages found for label "{label}"'}), 400
 
     try:
         code, is_mock = generate_driver_code(context)
@@ -492,6 +492,27 @@ def api_generate_driver():
         # "Generating..." placeholder stuck forever with no visible error
         return jsonify({"error": f"driver generation failed: {e}"}), 500
     return jsonify({"code": code, "mock": is_mock})
+
+
+@app.route("/api/generate_full_driver", methods=["POST"])
+def api_generate_full_driver():
+    """Spans every currently-deciphered label into one combined driver class
+    (poll/send/Nominal-publish), instead of one label+direction at a time."""
+    if not os.path.exists(CAPTURE_FILE):
+        return jsonify({"error": "no capture data yet"}), 400
+
+    records = list(load_capture_log(CAPTURE_FILE))
+    _, analysis = build_capture_view(CAPTURE_FILE)
+
+    try:
+        code, warnings, is_mock = generate_full_driver_code(records, analysis, load_deciphered(), load_labels())
+    except Exception as e:
+        return jsonify({"error": f"full driver generation failed: {e}"}), 500
+
+    if code is None:
+        return jsonify({"error": warnings[0] if warnings else "nothing to generate"}), 400
+
+    return jsonify({"code": code, "warnings": warnings, "mock": is_mock})
 
 
 if __name__ == "__main__":
