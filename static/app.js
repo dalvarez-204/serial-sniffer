@@ -331,7 +331,10 @@ function render() {
     el.addEventListener("click", async (e) => {
       e.stopPropagation();
       await removeLabel(Number(el.dataset.index));
-      render();
+      // loadData(), not just render() — removing the last message with a
+      // label also purges its deciphered fields/monitors on the backend,
+      // and state.deciphered/state.monitors need a real refetch to reflect that
+      await loadData();
     });
   });
 
@@ -1395,7 +1398,10 @@ function renderLabelGroups() {
         body: JSON.stringify({ name: group.name, direction: group.direction }),
       });
       for (const m of group.members) delete state.labels[m.index];
-      render();
+      // loadData(), not just render() — this always purges the label's
+      // deciphered fields/monitors on the backend, and state.deciphered/
+      // state.monitors need a real refetch to reflect that
+      await loadData();
     });
   });
 }
@@ -1559,6 +1565,35 @@ async function loadCaptureConfig() {
   const config = await res.json();
   document.getElementById("capture-interface").value = config.interface;
   document.getElementById("capture-device").value = config.device_address;
+  document.getElementById("reassembly-start-byte").value =
+    config.reassembly_start_byte !== null ? config.reassembly_start_byte.toString(16).toUpperCase() : "";
+  document.getElementById("reassembly-length-offset").value = config.reassembly_length_offset;
+  document.getElementById("reassembly-length-size").value = String(config.reassembly_length_size);
+  document.getElementById("reassembly-length-order").value = config.reassembly_length_order;
+  document.getElementById("reassembly-trailing-bytes").value = config.reassembly_trailing_bytes;
+}
+
+function readCaptureConfigFromForm() {
+  const startByteRaw = document.getElementById("reassembly-start-byte").value.trim();
+  const parsedStartByte = startByteRaw === "" ? null : parseInt(startByteRaw, 16);
+  return {
+    interface: document.getElementById("capture-interface").value.trim() || "usbmon3",
+    device_address: Number(document.getElementById("capture-device").value) || 2,
+    // null (blank field) means reassembly is off — most protocols don't need it
+    reassembly_start_byte: Number.isNaN(parsedStartByte) ? null : parsedStartByte,
+    reassembly_length_offset: Number(document.getElementById("reassembly-length-offset").value) || 1,
+    reassembly_length_size: Number(document.getElementById("reassembly-length-size").value) || 2,
+    reassembly_length_order: document.getElementById("reassembly-length-order").value || "little",
+    reassembly_trailing_bytes: Number(document.getElementById("reassembly-trailing-bytes").value) || 2,
+  };
+}
+
+async function saveCaptureConfig() {
+  await fetch("/api/capture_config", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(readCaptureConfigFromForm()),
+  });
 }
 
 let captureConfigSaveTimeout = null;
@@ -1568,19 +1603,21 @@ function scheduleCaptureConfigSave() {
   // capture thread when this changes while running, which you don't want
   // happening on every character typed into the interface field
   clearTimeout(captureConfigSaveTimeout);
-  captureConfigSaveTimeout = setTimeout(async () => {
-    const interfaceValue = document.getElementById("capture-interface").value.trim() || "usbmon3";
-    const deviceValue = Number(document.getElementById("capture-device").value) || 2;
-    await fetch("/api/capture_config", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ interface: interfaceValue, device_address: deviceValue }),
-    });
-  }, 600);
+  captureConfigSaveTimeout = setTimeout(saveCaptureConfig, 600);
 }
 
-document.getElementById("capture-interface").addEventListener("input", scheduleCaptureConfigSave);
-document.getElementById("capture-device").addEventListener("input", scheduleCaptureConfigSave);
+[
+  "capture-interface",
+  "capture-device",
+  "reassembly-start-byte",
+  "reassembly-length-offset",
+  "reassembly-length-size",
+  "reassembly-length-order",
+  "reassembly-trailing-bytes",
+].forEach((id) => {
+  const el = document.getElementById(id);
+  el.addEventListener(el.tagName === "SELECT" ? "change" : "input", scheduleCaptureConfigSave);
+});
 
 document.getElementById("scan-lsusb").addEventListener("click", async () => {
   const box = document.getElementById("lsusb-output");
@@ -1649,15 +1686,9 @@ document.getElementById("toggle-capture").addEventListener("click", async () => 
     // apply whatever's currently typed immediately, rather than depending
     // on the debounced auto-save (600ms after the last keystroke) having
     // already fired — otherwise enabling right after typing would silently
-    // start capture on stale interface/device settings
+    // start capture on stale settings
     clearTimeout(captureConfigSaveTimeout);
-    const interfaceValue = document.getElementById("capture-interface").value.trim() || "usbmon3";
-    const deviceValue = Number(document.getElementById("capture-device").value) || 2;
-    await fetch("/api/capture_config", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ interface: interfaceValue, device_address: deviceValue }),
-    });
+    await saveCaptureConfig();
   }
   await fetch(`/api/capture/${enabling ? "enable" : "disable"}`, { method: "POST" });
   setPollingInterval(enabling);

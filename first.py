@@ -2,6 +2,60 @@ import subprocess
 import json
 import sys
 
+
+class FrameReassembler:
+    """Buffers raw bytes across multiple USB transfers (per direction) and
+    re-emits complete logical frames using a start byte + length field,
+    instead of treating every USB transfer as its own message. Needed when
+    a device's USB-serial bridge chip flushes a partial frame to USB before
+    the full logical message has finished arriving over the underlying
+    UART — USB transfer boundaries don't correspond to the real protocol's
+    framing at all, so this recombines fragments using the protocol's own
+    start/length markers instead.
+
+    length_field_offset: byte offset (from the start byte) where the length
+    field begins — e.g. 1, immediately after a single start byte.
+    length_field_size: 1 or 2 bytes.
+    length_field_order: "big" or "little".
+    trailing_bytes: bytes AFTER the length-covered payload before the frame
+    is complete (e.g. a checksum byte + an end marker byte = 2).
+    """
+
+    def __init__(self, start_byte, length_field_offset, length_field_size, length_field_order, trailing_bytes):
+        self.start_byte = start_byte
+        self.length_field_offset = length_field_offset
+        self.length_field_size = length_field_size
+        self.length_field_order = length_field_order
+        self.trailing_bytes = trailing_bytes
+        self.buffers = {}  # direction -> bytearray
+
+    def feed(self, direction, data):
+        buf = self.buffers.setdefault(direction, bytearray())
+        buf.extend(data)
+        frames = []
+        while True:
+            start_idx = buf.find(self.start_byte)
+            if start_idx == -1:
+                buf.clear()  # no start marker at all in what's buffered — discard as noise
+                break
+            if start_idx > 0:
+                del buf[:start_idx]  # drop any leading garbage before the real start marker
+
+            length_field_end = self.length_field_offset + self.length_field_size
+            if len(buf) < length_field_end:
+                break  # not enough bytes yet to even read the length field
+
+            length_value = int.from_bytes(buf[self.length_field_offset:length_field_end], self.length_field_order)
+            total_frame_len = length_field_end + length_value + self.trailing_bytes
+
+            if len(buf) < total_frame_len:
+                break  # length is known, but the full frame hasn't fully arrived yet
+
+            frames.append(bytes(buf[:total_frame_len]))
+            del buf[:total_frame_len]
+        self.buffers[direction] = buf
+        return frames
+
 def stream_usb_capture(interface: str, device_address: int, process_holder: dict | None = None):
     cmd = [
         "tshark", "-i", interface, "-l",

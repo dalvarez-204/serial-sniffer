@@ -6,7 +6,7 @@ import os
 import subprocess
 import threading
 
-from first import load_capture_log, analyze_byte_variability, find_checksum_range, find_scaled_value, stream_usb_capture
+from first import load_capture_log, analyze_byte_variability, find_checksum_range, find_scaled_value, stream_usb_capture, FrameReassembler
 from codegen import build_codegen_context, generate_driver_code, generate_full_driver_code
 from line_coding import capture_line_coding
 
@@ -108,7 +108,19 @@ def save_labels(labels):
 
 
 def load_capture_config():
-    defaults = {"interface": "usbmon3", "device_address": 2}
+    defaults = {
+        "interface": "usbmon3",
+        "device_address": 2,
+        # frame reassembly is opt-in — a None start byte means "off", every
+        # USB transfer is treated as its own message (existing behavior,
+        # correct for the vast majority of protocols that don't span
+        # multiple USB transfers per logical message)
+        "reassembly_start_byte": None,
+        "reassembly_length_offset": 1,
+        "reassembly_length_size": 2,
+        "reassembly_length_order": "little",
+        "reassembly_trailing_bytes": 2,
+    }
     if os.path.exists(CAPTURE_CONFIG_FILE):
         with open(CAPTURE_CONFIG_FILE) as f:
             defaults.update(json.load(f))
@@ -142,6 +154,22 @@ def load_monitors():
 def save_monitors(monitors):
     with open(MONITORS_FILE, "w") as f:
         json.dump(monitors, f, indent=2)
+
+
+def _purge_deciphered_and_monitors(name, direction):
+    """Removes every deciphered field and monitor for this label+direction.
+    Only call this once NO message carries the label anymore — otherwise
+    this deletes byte-range knowledge that's still valid for whichever
+    messages still have it."""
+    deciphered = load_deciphered()
+    pruned_deciphered = {k: v for k, v in deciphered.items() if not (v["label"] == name and v["direction"] == direction)}
+    if len(pruned_deciphered) != len(deciphered):
+        save_deciphered(pruned_deciphered)
+
+    monitors = load_monitors()
+    pruned_monitors = {k: v for k, v in monitors.items() if not (v["label"] == name and v["direction"] == direction)}
+    if len(pruned_monitors) != len(monitors):
+        save_monitors(pruned_monitors)
 
 
 # tshark runs continuously in the background once enabled; "enabled" only
@@ -208,23 +236,42 @@ def _capture_loop(interface, device_address):
     # can reset it back to 0 for a real fresh start, without needing to
     # restart this thread — trimming the buffer, in contrast, never resets it
     capture_state["next_seq"] = _next_capture_seq()
+
+    config = load_capture_config()
+    reassembler = None
+    if config.get("reassembly_start_byte") is not None:
+        reassembler = FrameReassembler(
+            start_byte=config["reassembly_start_byte"],
+            length_field_offset=config["reassembly_length_offset"],
+            length_field_size=config["reassembly_length_size"],
+            length_field_order=config["reassembly_length_order"],
+            trailing_bytes=config["reassembly_trailing_bytes"],
+        )
+
     try:
         for timestamp, direction, data in stream_usb_capture(interface, device_address, capture_state["process_holder"]):
             if not capture_state["enabled"]:
+                if reassembler:
+                    # don't let a paused/resumed capture merge stale
+                    # partial bytes from before the pause with new ones
+                    reassembler.buffers.clear()
                 continue
-            record = {
-                "seq": capture_state["next_seq"],
-                "timestamp": timestamp,
-                "direction": direction,
-                "data_hex": data.hex(),
-            }
-            capture_state["next_seq"] += 1
-            # reopen per write (not one long-held handle) so a "Clear all captures"
-            # delete while this thread is running doesn't leave us writing to an
-            # unlinked inode nothing can see
-            with open(CAPTURE_FILE, "a") as f:
-                f.write(json.dumps(record) + "\n")
-            _trim_capture_log()
+
+            frames = reassembler.feed(direction, data) if reassembler else [data]
+            for frame in frames:
+                record = {
+                    "seq": capture_state["next_seq"],
+                    "timestamp": timestamp,
+                    "direction": direction,
+                    "data_hex": frame.hex(),
+                }
+                capture_state["next_seq"] += 1
+                # reopen per write (not one long-held handle) so a "Clear all captures"
+                # delete while this thread is running doesn't leave us writing to an
+                # unlinked inode nothing can see
+                with open(CAPTURE_FILE, "a") as f:
+                    f.write(json.dumps(record) + "\n")
+                _trim_capture_log()
     finally:
         capture_state["running"] = False
 
@@ -308,9 +355,15 @@ def api_get_capture_config():
 @app.route("/api/capture_config", methods=["POST"])
 def api_save_capture_config():
     payload = request.get_json()
+    reassembly_start_byte = payload.get("reassembly_start_byte")
     config = {
         "interface": payload.get("interface") or "usbmon3",
         "device_address": int(payload.get("device_address") or 2),
+        "reassembly_start_byte": int(reassembly_start_byte) if reassembly_start_byte is not None else None,
+        "reassembly_length_offset": int(payload.get("reassembly_length_offset") or 1),
+        "reassembly_length_size": int(payload.get("reassembly_length_size") or 2),
+        "reassembly_length_order": payload.get("reassembly_length_order") or "little",
+        "reassembly_trailing_bytes": int(payload.get("reassembly_trailing_bytes") or 2),
     }
     save_capture_config(config)
     if capture_state["running"]:
@@ -374,8 +427,24 @@ def api_detect_line_coding():
 @app.route("/api/label/<int:index>", methods=["DELETE"])
 def api_delete_label(index):
     labels = load_labels()
-    labels.pop(str(index), None)
+    removed = labels.pop(str(index), None)
     save_labels(labels)
+
+    # deciphered fields/monitors are keyed by label name, not message index —
+    # if this was the last message carrying this label+direction, clean
+    # those up too, otherwise they linger as orphaned "already deciphered"
+    # data with no message to actually back it
+    if removed and removed.get("name") and os.path.exists(CAPTURE_FILE):
+        direction_by_seq = {seq: d for seq, _, d, data in load_capture_log(CAPTURE_FILE) if len(data) > 0}
+        direction = direction_by_seq.get(index)
+        if direction is not None:
+            still_used = any(
+                l.get("name") == removed["name"] and direction_by_seq.get(int(k)) == direction
+                for k, l in labels.items()
+            )
+            if not still_used:
+                _purge_deciphered_and_monitors(removed["name"], direction)
+
     return jsonify({"ok": True})
 
 
@@ -399,6 +468,10 @@ def api_delete_labels_by_name():
     for key in to_remove:
         labels.pop(key, None)
     save_labels(labels)
+    # this removes every instance of the label at once, so — unlike the
+    # single-message delete above — it's always safe to also clean up its
+    # deciphered fields/monitors here, no "is it still used elsewhere" check needed
+    _purge_deciphered_and_monitors(name, direction)
     return jsonify({"ok": True, "removed": len(to_remove)})
 
 

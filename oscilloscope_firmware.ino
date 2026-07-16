@@ -185,13 +185,22 @@ uint8_t checksum(uint8_t *data, uint16_t len) {
 }
 void send_packet(uint8_t *payload, uint16_t len) {
   /*
-  puts the whole message together and writes it to serial
+  puts the whole message together into one buffer and writes it in a
+  SINGLE Serial.write() call, so it goes out as one contiguous USB
+  transfer instead of fragmenting across several — separate write() calls
+  for START/LEN/payload/checksum/END can each get flushed as their own USB
+  transfer, which shows up on the sniffing side as one logical frame split
+  across multiple captured rows
   */
-  Serial.write(START_BYTE);
-  Serial.write((uint8_t*)&len, 2);
-  Serial.write(payload, len);
-  Serial.write(checksum(payload, len));
-  Serial.write(END_BYTE);
+  uint8_t frame[MAX_LEN + 4];  // START + 2-byte LEN + payload + checksum + END
+  uint16_t idx = 0;
+  frame[idx++] = START_BYTE;
+  frame[idx++] = len & 0xFF;
+  frame[idx++] = len >> 8;
+  for (uint16_t i = 0; i < len; i++) frame[idx++] = payload[i];
+  frame[idx++] = checksum(payload, len);
+  frame[idx++] = END_BYTE;
+  Serial.write(frame, idx);
 }
 
 uint16_t read_packet(uint8_t* payload){

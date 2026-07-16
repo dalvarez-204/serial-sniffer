@@ -114,6 +114,9 @@ td.direction-OUT { color: #ffb37c; }
 .collapsible-heading { cursor: pointer; user-select: none; color: #ccc; }
 .collapsible-heading:hover { color: #fff; }
 #capture-settings-body.hidden { display: none; }
+#reassembly-details { margin-top: 0.75rem; }
+#reassembly-details summary { cursor: pointer; color: #999; }
+#reassembly-details summary:hover { color: #ccc; }
 
 .toolbar { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; align-items: flex-end; }
 .toolbar label { display: flex; flex-direction: column; font-size: 0.8rem; color: #aaa; }

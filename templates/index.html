@@ -27,6 +27,28 @@
     <p id="capture-status" class="hint"></p>
     <p id="line-coding-status" class="hint"></p>
     <pre id="lsusb-output" class="hidden"></pre>
+
+    <details id="reassembly-details">
+      <summary>Frame reassembly (advanced)</summary>
+      <p class="hint">Some devices' USB-serial bridge chips flush a single logical message across several USB transfers before it's fully arrived over the wire — if the capture table is splitting one message into multiple rows, set the real protocol's start byte + length field here to recombine them. Leave "Start byte" blank to disable (default; most protocols don't need this).</p>
+      <div class="toolbar">
+        <label>Start byte (hex) <input id="reassembly-start-byte" type="text" placeholder="e.g. 7E"></label>
+        <label>Length field offset <input id="reassembly-length-offset" type="number" min="0" placeholder="1"></label>
+        <label>Length field size
+          <select id="reassembly-length-size">
+            <option value="1">1 byte</option>
+            <option value="2" selected>2 bytes</option>
+          </select>
+        </label>
+        <label>Length field order
+          <select id="reassembly-length-order">
+            <option value="little" selected>little-endian</option>
+            <option value="big">big-endian</option>
+          </select>
+        </label>
+        <label>Trailing bytes <input id="reassembly-trailing-bytes" type="number" min="0" placeholder="2"></label>
+      </div>
+    </details>
   </div>
 
   <div class="toolbar">
